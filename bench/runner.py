@@ -106,7 +106,7 @@ def check(spec: dict, report: dict) -> list[str]:
         if want is None or k not in resolved:
             continue
         got = resolved[k]
-        if isinstance(want, bool) or got == want:
+        if got == want:
             continue
         # str() both sides: paths and numbers arrive as strings on argv.
         if str(got) == str(want):
