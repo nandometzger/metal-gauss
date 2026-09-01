@@ -126,6 +126,22 @@ def test_bool_knobs_become_flag_or_no_flag():
     assert "--no-fused-adam" in build_cmd({"fused_adam": False}, Path("/tmp/r"))
 
 
+def test_boolean_divergence_true_to_false_is_fatal():
+    """A requested true flag must not be reported as successfully resolved false."""
+    bad = check({"fused_adam": True}, _report(fused_adam=False))
+    assert bad and "fused_adam" in bad[0]
+
+
+def test_boolean_divergence_false_to_true_is_fatal():
+    """A requested false flag must not be reported as successfully resolved true."""
+    bad = check({"fused_adam": False}, _report(fused_adam=True))
+    assert bad and "fused_adam" in bad[0]
+
+
+def test_boolean_agreement_is_silent():
+    assert check({"fused_adam": True}, _report(fused_adam=True)) == []
+
+
 def test_steps_divergence_without_a_scaler_is_NOT_excused():
     """The allow-list must check that its trigger actually fired.
 
