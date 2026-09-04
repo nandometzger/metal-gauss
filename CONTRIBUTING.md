@@ -16,7 +16,7 @@ not mean the kernels are fine** — run the full suite locally.
 ```bash
 uv venv --python 3.12 .venv
 uv pip install --python .venv/bin/python -e ".[bench,train]" pytest lpips scikit-image imageio tqdm torchvision
-.venv/bin/python -m pytest -q          # 166 tests, needs an Apple GPU
+.venv/bin/python -m pytest -q          # 188 tests, needs an Apple GPU
 ```
 
 ## Performance claims need a warm machine and an idle one

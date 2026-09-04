@@ -670,7 +670,10 @@ def main():
                          "--resolution-schedule. 0 disables (full res throughout).")
     ap.add_argument("--resolution-schedule", type=int, default=None,
                     help="steps between resolution doublings. Default steps//3, "
-                         "so full resolution is reached two thirds through.")
+                         "so full resolution is reached two thirds through. "
+                         "--steps-scaler scales this too, explicit value "
+                         "included, so a scaled run keeps the same curriculum "
+                         "in proportion.")
     ap.add_argument("--seed", type=int, default=0,
                     help="seeds torch RNG. Use the SAME seed on both arms of an "
                          "A/B so they share draws and only the tested variable "
