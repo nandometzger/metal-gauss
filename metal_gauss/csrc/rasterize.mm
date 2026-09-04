@@ -21,12 +21,20 @@ static void initLibrary(const std::string& src) {
     NSError* err = nil;
     id<MTLDevice> dev = MTLCreateSystemDefaultDevice();
     TORCH_CHECK(dev, "no Metal device");
+    // Floor, not a ceiling: the gradient kernels need MSL 3.0 for native
+    // atomic_float. Some runtime compilers (the hosted macos-15 CI image
+    // among them) default below that and reject atomic_float outright.
+    // Raise this if a kernel ever needs a later language feature.
     MTLCompileOptions* options = [MTLCompileOptions new];
     if (@available(macOS 13.0, *)) {
         options.languageVersion = MTLLanguageVersion3_0;
     }
-    gLib = [dev newLibraryWithSource:[NSString stringWithUTF8String:src.c_str()]
-                             options:options error:&err];
+    // newLibraryWithSource returns +0. gLib outlives this scope, so it needs an
+    // explicit retain under MRC; today it only survives because nothing on this
+    // call path installs an autorelease pool.
+    gLib = [[dev newLibraryWithSource:[NSString stringWithUTF8String:src.c_str()]
+                              options:options error:&err] retain];
+    [options release];  // no ARC here: see extra_cflags in metal_backend.py
     TORCH_CHECK(gLib, "Metal compile failed: ",
                 err ? err.localizedDescription.UTF8String : "unknown");
     gPipelines = [NSMutableDictionary new];

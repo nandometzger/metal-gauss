@@ -18,6 +18,12 @@ on:
         type: boolean
         default: false
 
+# Hosted macOS minutes are the scarce resource here: never leave a superseded
+# run of the same ref burning a Mac.
+concurrency:
+  group: checks-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   provenance:
     runs-on: ubuntu-latest
@@ -59,6 +65,7 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+          cache: pip
 
       - name: Install test dependencies
         run: |
