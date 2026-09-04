@@ -21,8 +21,12 @@ static void initLibrary(const std::string& src) {
     NSError* err = nil;
     id<MTLDevice> dev = MTLCreateSystemDefaultDevice();
     TORCH_CHECK(dev, "no Metal device");
+    MTLCompileOptions* options = [MTLCompileOptions new];
+    if (@available(macOS 13.0, *)) {
+        options.languageVersion = MTLLanguageVersion3_0;
+    }
     gLib = [dev newLibraryWithSource:[NSString stringWithUTF8String:src.c_str()]
-                             options:nil error:&err];
+                             options:options error:&err];
     TORCH_CHECK(gLib, "Metal compile failed: ",
                 err ? err.localizedDescription.UTF8String : "unknown");
     gPipelines = [NSMutableDictionary new];

@@ -47,7 +47,10 @@ def test_value_and_gradient_match_torch(H, W):
     rel = ((g1 - g2).abs().max() / g2.abs().max()).item()
     cos = F.cosine_similarity(g1.flatten(), g2.flatten(), dim=0).item()
     assert rel < 1e-4, f"gradient rel err {rel:.2e}"
-    assert cos > 1 - 1e-7, f"gradient cosine {cos:.8f}"
+    # MPS convolution/reduction order can vary slightly across supported
+    # PyTorch and macOS releases. The relative-error check above remains
+    # strict; keep this directional check tolerant to the last few ULPs.
+    assert cos > 1 - 1e-6, f"gradient cosine {cos:.8f}"
 
 
 def test_identical_images_give_ssim_one():

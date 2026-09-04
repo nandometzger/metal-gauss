@@ -1,9 +1,9 @@
-# CPU-only guards. Deliberately does NOT run the kernel tests: they need a real
-# Apple GPU, and a CI job that cannot pass is worse than no CI job.
+# The provenance job below is deliberately CPU-only. The opt-in Metal job is
+# kept separate because it needs a hosted Apple GPU and runtime Metal 3
+# compilation.
 #
-# What this does catch is the class of bug that actually hurt this project --
-# benchmark bookkeeping, not kernels. Every wrong number published here came
-# from a harness.
+# Keeping the jobs separate lets the repository retain a deterministic,
+# hardware-independent check while still making the actual kernels testable.
 name: checks
 
 on:
@@ -11,6 +11,12 @@ on:
     branches: [main]
   pull_request:
   workflow_dispatch:
+    inputs:
+      run_metal:
+        description: "Run the Apple Silicon Metal job"
+        required: false
+        type: boolean
+        default: false
 
 jobs:
   provenance:
@@ -36,3 +42,44 @@ jobs:
         # Informational: lists results that cannot state the protocol they ran
         # under. Does not fail the build, since historical results are kept.
         run: python bench/quarantine.py
+
+  metal:
+    name: Metal kernels (Apple Silicon)
+    # Keep this opt-in while the hosted runner is being evaluated. A repository
+    # variable enables it for pull requests after the first successful trial;
+    # workflow_dispatch provides a way to run that trial before then.
+    if: >-
+      (github.event_name == 'workflow_dispatch' && inputs.run_metal) ||
+      vars.METAL_GAUSS_ENABLE_MPS_CI == 'true'
+    runs-on: macos-15
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install test dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e ".[bench,train,test]" \
+            lpips scikit-image imageio tqdm torchvision
+
+      - name: Verify Apple Silicon and MPS
+        run: |
+          test "$(uname -m)" = "arm64"
+          python - <<'PY'
+          import platform
+          import torch
+
+          print(f"machine={platform.machine()}")
+          print(f"torch={torch.__version__}")
+          print(f"mps_built={torch.backends.mps.is_built()}")
+          print(f"mps_available={torch.backends.mps.is_available()}")
+          if not torch.backends.mps.is_available():
+              raise SystemExit("PyTorch cannot access the hosted Apple GPU")
+          PY
+
+      - name: Run the complete test suite
+        run: python -m pytest -q

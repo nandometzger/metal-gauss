@@ -8,16 +8,39 @@ enough to be worth knowing before you start.
 The kernels are Metal and compile at runtime. There is no CPU fallback and no
 CUDA path, so the rasteriser tests cannot run anywhere else.
 
-CI is deliberately CPU-only: it runs the harness tests and checks that the
-generated tables still match their JSONs. A job that needs a GPU it does not
-have would fail forever, which is worse than not running. So **CI passing does
-not mean the kernels are fine** — run the full suite locally.
+The provenance job is CPU-only: it runs the harness tests and checks that the
+generated tables still match their JSONs. The separate `metal` job runs the
+kernel suite on a hosted Apple Silicon runner, but remains opt-in while the
+repository evaluates its cost and long-term stability. So **the default CI
+job passing does not mean the kernels are fine** — run the full suite locally,
+or opt in to the hosted Apple Silicon job.
 
 ```bash
 uv venv --python 3.12 .venv
 uv pip install --python .venv/bin/python -e ".[bench,train]" pytest lpips scikit-image imageio tqdm torchvision
 .venv/bin/python -m pytest -q          # 188 tests, needs an Apple GPU
 ```
+
+The `metal` job in `.github/workflows/checks.yml` is opt-in during its initial
+evaluation. It uses the hosted `macos-15` arm64 runner. A repository variable
+named `METAL_GAUSS_ENABLE_MPS_CI` set to `true` enables it for pull requests;
+the `run_metal` workflow-dispatch input enables a one-off run. The job checks
+that the runner is `arm64`, verifies that PyTorch can see MPS, installs the
+complete test dependencies, and runs all tests. It contains no timing
+benchmarks.
+
+The Metal extension compiles its `.metal` sources at runtime. The runtime
+compiler on the hosted runner does not accept the default language level for
+the repository's floating-point atomics, so `rasterize.mm` explicitly
+requests Metal Shading Language 3.0 before creating the library. This keeps
+the existing native `atomic_float` gradient path and avoids a slower software
+accumulator fallback.
+
+The job was validated on September 4, 2026 using the GitHub-hosted
+`macos-15-arm64` image, Python 3.12, and PyTorch 2.14.0: the runner reported
+`machine=arm64`, `mps_built=True`, and `mps_available=True`, and the complete
+suite passed (`188 passed in 92.92s`). The hosted run is recorded [in the
+Actions log](https://github.com/Neilus03/metal-gauss/actions/runs/33887832871).
 
 ## Performance claims need a warm machine and an idle one
 
