@@ -145,7 +145,12 @@ def install_spirula() -> bool:
         print("    cmake configure failed. spirula needs the Vulkan SDK / "
               "MoltenVK; see bench/compare/STATUS.md")
         return False
-    if _run(["cmake", "--build", str(build), "--parallel"]).returncode:
+    # `--parallel` with no number means UNLIMITED jobs. On a 10-core fanless
+    # Air that pushed the 15-minute load average to 163 and swapped the machine
+    # hard enough to freeze the desktop. Leave a core or two for the user, who
+    # is probably still trying to use their computer.
+    jobs = max(1, (os.cpu_count() or 4) - 2)
+    if _run(["cmake", "--build", str(build), "--parallel", str(jobs)]).returncode:
         print("    build failed; see bench/compare/STATUS.md")
         return False
     ok = Path(spirula_bin()).exists()
