@@ -148,9 +148,15 @@ surface. That is why the default sweep is small.
   **~3 s**: 6.1 s of it was decoding PNGs, and 4.1 s of that decoded the 200 held-out views a run
   without evaluation never reads. The metal-gauss rows above were re-measured after that change;
   the competitor rows were not, and predate it.
-- That re-measurement moves the **1 min** budget by +0.5 dB and nothing else. The saving is ~4 s,
-  which is visible at the 500-iteration rung (median −4.4 s over 8 scenes) and invisible past
-  ~2 000, where run-to-run spread on the same machine is ±40 s.
+- That re-measurement moves the **1 min** budget by +0.5 dB and nothing else — and **do not lean on
+  that +0.5 dB**. It comes from three scenes whose 2 000-iteration rung cleared 60 s by 0.5, 0.9 and
+  2.2 s; re-measured later the same day against a machine also driving a desktop, none of the eight
+  cleared it. The rung boundary, not the loader, decides that row. What is solid is the saving
+  itself: ~4 s, visible at the 500 rung (median −4.4 s over 8 scenes, every scene negative) and
+  invisible past ~2 000, where run-to-run spread is ±40 s.
+- Wall-clock rows need a machine that is not also drawing a screen. The same 2 000-iteration rung
+  measured 57–68 s on an idle machine and 74–96 s while a browser was open. `require_gpu_exclusive()`
+  catches a second trainer, not a compositor.
 - 7 k numbers are **not comparable to published 30 k numbers** — 5.1 dB apart.
 - `--antialias` is off by default; worth **+6.68 dB at 200 px** render resolution.
 - Run-to-run noise floors: ours **0.19 dB**, Brush **0.74**, spirula **0.15–1.27**, msplat **3.35**
