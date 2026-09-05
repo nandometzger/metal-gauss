@@ -1,8 +1,8 @@
-  metal-gauss     500 b=30k    0.31 min        20.489 dB     27,857 splats
-  metal-gauss    1000 b=100k    0.66 min        23.791 dB    100,000 splats
-  metal-gauss    2000 b=100k    1.10 min        26.145 dB    100,000 splats
-  metal-gauss    4000 b=100k    1.87 min        28.800 dB    100,000 splats
-  metal-gauss    7000 b=100k    2.97 min        30.596 dB    100,000 splats
-  metal-gauss   15000 b=100k    5.93 min        32.973 dB    100,000 splats
+  metal-gauss     500 b=30k    0.27 min        20.498 dB     27,857 splats
+  metal-gauss    1000 b=100k    0.61 min        23.613 dB    100,000 splats
+  metal-gauss    2000 b=100k    1.06 min        26.280 dB    100,000 splats
+  metal-gauss    4000 b=100k    2.02 min        28.871 dB    100,000 splats
+  metal-gauss    7000 b=100k    3.15 min        30.713 dB    100,000 splats
+  metal-gauss   15000 b=100k    6.62 min        33.026 dB    100,000 splats
 
--> bench/results/sweep8/lego_metal-gauss.json
+-> /private/tmp/claude-501/-Users-metzgern/d957f3bf-ebf5-45b7-b9dd-ff9331200be5/scratchpad/mg/bench/results/sweep8/lego_metal-gauss.json

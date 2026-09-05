@@ -1,5 +1,5 @@
 {
-  "scene": "data/nerf_synthetic/ficus",
+  "scene": "/private/tmp/claude-501/-Users-metzgern/d957f3bf-ebf5-45b7-b9dd-ff9331200be5/scratchpad/mg/data/nerf_synthetic/ficus",
   "resolution": 800,
   "msplat_variant": "scaled",
   "rows": [
@@ -8,12 +8,12 @@
       "iters": 500,
       "requested_budget": "auto",
       "ok": true,
-      "wall_s": 16.9,
+      "wall_s": 12.5,
       "resolved": {
         "antialias": false,
         "appearance": "off",
         "appearance_reg": 0.01,
-        "blender": "data/nerf_synthetic/ficus",
+        "blender": "/private/tmp/claude-501/-Users-metzgern/d957f3bf-ebf5-45b7-b9dd-ff9331200be5/scratchpad/mg/data/nerf_synthetic/ficus",
         "budget": 30000,
         "colmap": null,
         "densify_gate_frac": 0.3,
@@ -40,7 +40,7 @@
         "out": null,
         "relocate_every": 100,
         "relocate_until_frac": 0.85,
-        "report": "/var/folders/28/jp1bnbdx18zclmsr7zzsfdk40000gn/T/tmpwprp7p8_.report.json",
+        "report": "/var/folders/28/jp1bnbdx18zclmsr7zzsfdk40000gn/T/tmpg2r25v60.report.json",
         "resolution_schedule": 166,
         "scale_reg": 0.01,
         "seed": 0,
@@ -52,14 +52,14 @@
         "steps_scaler": 1.0
       },
       "env": {
-        "git": "a78eb15",
+        "git": "c607668",
         "dirty": true,
-        "torch": "2.13.0",
-        "platform": "macOS-26.5.2-arm64-arm-64bit",
+        "torch": "2.14.0",
+        "platform": "macOS-26.6.2-arm64-arm-64bit",
         "machine": "arm64"
       },
-      "psnr": 21.3348,
-      "ssim": 0.87787,
+      "psnr": 21.4134,
+      "ssim": 0.87815,
       "n_splats": 27857
     },
     {
@@ -67,12 +67,12 @@
       "iters": 1000,
       "requested_budget": "auto",
       "ok": true,
-      "wall_s": 42.3,
+      "wall_s": 39.4,
       "resolved": {
         "antialias": false,
         "appearance": "off",
         "appearance_reg": 0.01,
-        "blender": "data/nerf_synthetic/ficus",
+        "blender": "/private/tmp/claude-501/-Users-metzgern/d957f3bf-ebf5-45b7-b9dd-ff9331200be5/scratchpad/mg/data/nerf_synthetic/ficus",
         "budget": 100000,
         "colmap": null,
         "densify_gate_frac": 0.3,
@@ -99,7 +99,7 @@
         "out": null,
         "relocate_every": 100,
         "relocate_until_frac": 0.85,
-        "report": "/var/folders/28/jp1bnbdx18zclmsr7zzsfdk40000gn/T/tmpwk8fcutl.report.json",
+        "report": "/var/folders/28/jp1bnbdx18zclmsr7zzsfdk40000gn/T/tmp189sf145.report.json",
         "resolution_schedule": 333,
         "scale_reg": 0.01,
         "seed": 0,
@@ -111,14 +111,14 @@
         "steps_scaler": 1.0
       },
       "env": {
-        "git": "a78eb15",
+        "git": "c607668",
         "dirty": true,
-        "torch": "2.13.0",
-        "platform": "macOS-26.5.2-arm64-arm-64bit",
+        "torch": "2.14.0",
+        "platform": "macOS-26.6.2-arm64-arm-64bit",
         "machine": "arm64"
       },
-      "psnr": 19.2909,
-      "ssim": 0.8923,
+      "psnr": 19.161,
+      "ssim": 0.89093,
       "n_splats": 100000
     },
     {
@@ -126,12 +126,12 @@
       "iters": 2000,
       "requested_budget": "auto",
       "ok": true,
-      "wall_s": 65.3,
+      "wall_s": 59.1,
       "resolved": {
         "antialias": false,
         "appearance": "off",
         "appearance_reg": 0.01,
-        "blender": "data/nerf_synthetic/ficus",
+        "blender": "/private/tmp/claude-501/-Users-metzgern/d957f3bf-ebf5-45b7-b9dd-ff9331200be5/scratchpad/mg/data/nerf_synthetic/ficus",
         "budget": 100000,
         "colmap": null,
         "densify_gate_frac": 0.3,
@@ -158,7 +158,7 @@
         "out": null,
         "relocate_every": 100,
         "relocate_until_frac": 0.85,
-        "report": "/var/folders/28/jp1bnbdx18zclmsr7zzsfdk40000gn/T/tmph171vb4y.report.json",
+        "report": "/var/folders/28/jp1bnbdx18zclmsr7zzsfdk40000gn/T/tmp6l8j15_4.report.json",
         "resolution_schedule": 666,
         "scale_reg": 0.01,
         "seed": 0,
@@ -170,14 +170,14 @@
         "steps_scaler": 1.0
       },
       "env": {
-        "git": "a78eb15",
+        "git": "c607668",
         "dirty": true,
-        "torch": "2.13.0",
-        "platform": "macOS-26.5.2-arm64-arm-64bit",
+        "torch": "2.14.0",
+        "platform": "macOS-26.6.2-arm64-arm-64bit",
         "machine": "arm64"
       },
-      "psnr": 24.1941,
-      "ssim": 0.94282,
+      "psnr": 24.0499,
+      "ssim": 0.94241,
       "n_splats": 100000
     },
     {
@@ -185,12 +185,12 @@
       "iters": 4000,
       "requested_budget": "auto",
       "ok": true,
-      "wall_s": 101.6,
+      "wall_s": 108.6,
       "resolved": {
         "antialias": false,
         "appearance": "off",
         "appearance_reg": 0.01,
-        "blender": "data/nerf_synthetic/ficus",
+        "blender": "/private/tmp/claude-501/-Users-metzgern/d957f3bf-ebf5-45b7-b9dd-ff9331200be5/scratchpad/mg/data/nerf_synthetic/ficus",
         "budget": 100000,
         "colmap": null,
         "densify_gate_frac": 0.3,
@@ -217,7 +217,7 @@
         "out": null,
         "relocate_every": 100,
         "relocate_until_frac": 0.85,
-        "report": "/var/folders/28/jp1bnbdx18zclmsr7zzsfdk40000gn/T/tmp9w5wq1c8.report.json",
+        "report": "/var/folders/28/jp1bnbdx18zclmsr7zzsfdk40000gn/T/tmpf28nd6eu.report.json",
         "resolution_schedule": 1333,
         "scale_reg": 0.01,
         "seed": 0,
@@ -229,14 +229,14 @@
         "steps_scaler": 1.0
       },
       "env": {
-        "git": "a78eb15",
+        "git": "c607668",
         "dirty": true,
-        "torch": "2.13.0",
-        "platform": "macOS-26.5.2-arm64-arm-64bit",
+        "torch": "2.14.0",
+        "platform": "macOS-26.6.2-arm64-arm-64bit",
         "machine": "arm64"
       },
-      "psnr": 27.4138,
-      "ssim": 0.96709,
+      "psnr": 27.2684,
+      "ssim": 0.96626,
       "n_splats": 100000
     },
     {
@@ -244,12 +244,12 @@
       "iters": 7000,
       "requested_budget": "auto",
       "ok": true,
-      "wall_s": 154.9,
+      "wall_s": 143.6,
       "resolved": {
         "antialias": false,
         "appearance": "off",
         "appearance_reg": 0.01,
-        "blender": "data/nerf_synthetic/ficus",
+        "blender": "/private/tmp/claude-501/-Users-metzgern/d957f3bf-ebf5-45b7-b9dd-ff9331200be5/scratchpad/mg/data/nerf_synthetic/ficus",
         "budget": 100000,
         "colmap": null,
         "densify_gate_frac": 0.3,
@@ -276,7 +276,7 @@
         "out": null,
         "relocate_every": 100,
         "relocate_until_frac": 0.85,
-        "report": "/var/folders/28/jp1bnbdx18zclmsr7zzsfdk40000gn/T/tmpprjjbg93.report.json",
+        "report": "/var/folders/28/jp1bnbdx18zclmsr7zzsfdk40000gn/T/tmp98ih43pa.report.json",
         "resolution_schedule": 2333,
         "scale_reg": 0.01,
         "seed": 0,
@@ -288,14 +288,14 @@
         "steps_scaler": 1.0
       },
       "env": {
-        "git": "a78eb15",
+        "git": "c607668",
         "dirty": true,
-        "torch": "2.13.0",
-        "platform": "macOS-26.5.2-arm64-arm-64bit",
+        "torch": "2.14.0",
+        "platform": "macOS-26.6.2-arm64-arm-64bit",
         "machine": "arm64"
       },
-      "psnr": 28.6482,
-      "ssim": 0.9734,
+      "psnr": 28.7081,
+      "ssim": 0.97368,
       "n_splats": 100000
     },
     {
@@ -303,12 +303,12 @@
       "iters": 15000,
       "requested_budget": "auto",
       "ok": true,
-      "wall_s": 311.5,
+      "wall_s": 293.5,
       "resolved": {
         "antialias": false,
         "appearance": "off",
         "appearance_reg": 0.01,
-        "blender": "data/nerf_synthetic/ficus",
+        "blender": "/private/tmp/claude-501/-Users-metzgern/d957f3bf-ebf5-45b7-b9dd-ff9331200be5/scratchpad/mg/data/nerf_synthetic/ficus",
         "budget": 100000,
         "colmap": null,
         "densify_gate_frac": 0.3,
@@ -335,7 +335,7 @@
         "out": null,
         "relocate_every": 100,
         "relocate_until_frac": 0.85,
-        "report": "/var/folders/28/jp1bnbdx18zclmsr7zzsfdk40000gn/T/tmpb4szck0s.report.json",
+        "report": "/var/folders/28/jp1bnbdx18zclmsr7zzsfdk40000gn/T/tmpnsmg30pb.report.json",
         "resolution_schedule": 5000,
         "scale_reg": 0.01,
         "seed": 0,
@@ -347,14 +347,14 @@
         "steps_scaler": 1.0
       },
       "env": {
-        "git": "a78eb15",
+        "git": "c607668",
         "dirty": true,
-        "torch": "2.13.0",
-        "platform": "macOS-26.5.2-arm64-arm-64bit",
+        "torch": "2.14.0",
+        "platform": "macOS-26.6.2-arm64-arm-64bit",
         "machine": "arm64"
       },
-      "psnr": 30.597,
-      "ssim": 0.97961,
+      "psnr": 30.5405,
+      "ssim": 0.97953,
       "n_splats": 100000
     }
   ]

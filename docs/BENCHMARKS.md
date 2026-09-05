@@ -61,15 +61,15 @@ The README carries this as a forest plot; these are the numbers behind it.
 <!-- BEGIN:margin -->
 | vs | iters | mean Δ | 95% CI | scenes won |
 |---|---:|---:|---|---:|
-| spirula-studio | 500 | +7.74 dB | [+6.25, +9.23] | 8/8 |
-| spirula-studio | 7,000 | +8.39 dB | [+5.43, +11.34] | 8/8 |
-| spirula-studio | 15,000 | +2.65 dB | **[-0.13, +5.43]** — includes 0 | 7/8 |
-| Brush | 500 | +8.67 dB | [+6.10, +11.23] | 8/8 |
-| Brush | 7,000 | +6.64 dB | [+4.20, +9.07] | 8/8 |
-| Brush | 15,000 | +4.93 dB | [+1.97, +7.88] | 8/8 |
-| msplat | 500 | +7.97 dB | [+6.41, +9.53] | 8/8 |
-| msplat | 7,000 | +8.22 dB | [+5.40, +11.04] | 8/8 |
-| msplat | 15,000 | +10.28 dB | [+7.57, +12.98] | 8/8 |
+| spirula-studio | 500 | +7.78 dB | [+6.29, +9.27] | 8/8 |
+| spirula-studio | 7,000 | +8.43 dB | [+5.47, +11.39] | 8/8 |
+| spirula-studio | 15,000 | +2.65 dB | **[-0.13, +5.44]** — includes 0 | 7/8 |
+| Brush | 500 | +8.70 dB | [+6.12, +11.29] | 8/8 |
+| Brush | 7,000 | +6.68 dB | [+4.26, +9.11] | 8/8 |
+| Brush | 15,000 | +4.93 dB | [+1.99, +7.87] | 8/8 |
+| msplat | 500 | +8.01 dB | [+6.44, +9.58] | 8/8 |
+| msplat | 7,000 | +8.27 dB | [+5.45, +11.09] | 8/8 |
+| msplat | 15,000 | +10.28 dB | [+7.58, +12.97] | 8/8 |
 
 *Per-scene difference across all 8 scenes, 95% CI from Student-t (df 7). A CI containing zero means the quality margin at that point is not resolved by 8 scenes, whatever the mean says.*
 <!-- END:margin -->
@@ -85,35 +85,35 @@ Every implementation at every rung, sorted by wall-clock. The README carries the
 | msplat (stock) | 500 | 0.10 min | 12.06 | 0.7986 |
 | msplat (stock) | 2,000 | 0.15 min | 19.65 | 0.8537 |
 | msplat (stock) | 1,000 | 0.16 min | 13.50 | 0.8108 |
-| metal-gauss | 500 | 0.31 min | 21.51 | 0.8498 |
+| metal-gauss | 500 | 0.23 min | 21.55 | 0.8501 |
 | msplat (stock) | 4,000 | 0.34 min | 19.13 | 0.8754 |
 | spirula-studio | 500 | 0.34 min | 13.77 | 0.8167 |
 | brush | 500 | 0.43 min | 12.85 | 0.7967 |
 | msplat (scaled) | 500 | 0.44 min | 13.54 | 0.8113 |
+| metal-gauss | 1,000 | 0.60 min | 22.76 | 0.8842 |
 | spirula-studio | 1,000 | 0.61 min | 15.12 | 0.8328 |
-| metal-gauss | 1,000 | 0.65 min | 22.74 | 0.8845 |
 | msplat (scaled) | 2,000 | 0.73 min | 18.26 | 0.8690 |
 | brush | 1,000 | 0.79 min | 14.35 | 0.8042 |
 | msplat (scaled) | 1,000 | 0.88 min | 17.53 | 0.8330 |
 | msplat (stock) | 7,000 | 0.90 min | 21.19 | 0.9067 |
-| metal-gauss | 2,000 | 1.07 min | 26.27 | 0.9204 |
+| metal-gauss | 2,000 | 1.04 min | 26.31 | 0.9206 |
 | spirula-studio | 2,000 | 1.32 min | 17.36 | 0.8665 |
 | brush | 2,000 | 1.58 min | 18.44 | 0.8340 |
 | msplat (scaled) | 4,000 | 1.59 min | 20.22 | 0.8977 |
-| metal-gauss | 4,000 | 1.82 min | 28.81 | 0.9439 |
+| metal-gauss | 4,000 | 1.82 min | 28.82 | 0.9440 |
 | msplat (scaled) | 7,000 | 2.74 min | 20.60 | 0.9021 |
-| metal-gauss | 7,000 | 2.90 min | 30.33 | 0.9545 |
+| metal-gauss | 7,000 | 2.82 min | 30.38 | 0.9547 |
 | brush | 4,000 | 3.19 min | 21.37 | 0.8677 |
 | spirula-studio | 4,000 | 3.60 min | 19.60 | 0.8973 |
 | msplat (stock) | 15,000 | 4.14 min | 20.58 | 0.9084 |
 | brush | 7,000 | 5.67 min | 23.70 | 0.8979 |
 | msplat (scaled) | 15,000 | 5.78 min | 21.04 | 0.9084 |
-| metal-gauss | 15,000 | 5.97 min | 31.87 | 0.9638 |
+| metal-gauss | 15,000 | 5.93 min | 31.87 | 0.9639 |
 | spirula-studio | 7,000 | 9.78 min | 21.95 | 0.9082 |
 | brush | 15,000 | 12.57 min | 26.94 | 0.9358 |
 | spirula-studio | 15,000 | 28.38 min | 29.22 | 0.9506 |
 
-*All 8 NeRF-synthetic scenes, official 200-view test split, one evaluator, identical seed point cloud per scene, strictly sequential. metal-gauss dominates (faster **and** better on PSNR / on PSNR **and** SSIM): **48/48** / **48/48** of Brush, **45/48** / **41/48** of spirula-studio, **66/96** / **50/96** of msplat (both variants). Single runs per cell; noise floors differ per implementation AND per scene (see NEGATIVE_RESULTS.md): metal-gauss 0.22 dB, spirula 0.15-1.27, Brush 0.74, msplat up to 3.35 -- msplat's counts are indicative only.*
+*All 8 NeRF-synthetic scenes, official 200-view test split, one evaluator, identical seed point cloud per scene, strictly sequential. metal-gauss dominates (faster **and** better on PSNR / on PSNR **and** SSIM): **48/48** / **48/48** of Brush, **47/48** / **45/48** of spirula-studio, **68/96** / **51/96** of msplat (both variants). Single runs per cell; noise floors differ per implementation AND per scene (see NEGATIVE_RESULTS.md): metal-gauss 0.22 dB, spirula 0.15-1.27, Brush 0.74, msplat up to 3.35 -- msplat's counts are indicative only.*
 <!-- END:pareto-scenes -->
 
 ## lego, as a worked example
