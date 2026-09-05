@@ -24,7 +24,7 @@ import time
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
-from bench.paths import brush_bin, msplat_bin  # noqa: E402
+from bench.paths import brush_bin, competitor_versions, msplat_bin  # noqa: E402
 sys.path.insert(0, str(ROOT))
 from bench.runner import RunDiverged, RunFailed  # noqa: E402
 from bench.runner import run as run_trainer      # noqa: E402
@@ -225,6 +225,13 @@ def main():
                    "msplat_variant": "stock" if a.msplat_stock else "scaled",
                    "ok": s.get("psnr") is not None,
                    "wall_s": round(wall, 1), **s}
+            # Which competitor build produced this. metal-gauss rows already
+            # carry `env` from bench.provenance; the competitors carried
+            # nothing, so a row could not say what it had raced against.
+            build = competitor_versions().get(
+                {"msplat": "msplat", "brush": "brush"}.get(impl, ""))
+            if build:
+                row["build"] = build
             rows.append(row)
             q = f"{s['psnr']:.3f}" if s.get("psnr") else "score FAILED"
             print(f"  {impl:<12} {n:>6} b={(str(bud//1000)+'k') if bud else 'auto':>5}  {wall/60:6.2f} min  "
