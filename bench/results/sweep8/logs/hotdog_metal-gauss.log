@@ -1,8 +1,8 @@
-  metal-gauss     500 b=30k    0.31 min        24.811 dB     27,857 splats
-  metal-gauss    1000 b=100k    0.67 min        30.453 dB    100,000 splats
-  metal-gauss    2000 b=100k    1.20 min        33.056 dB    100,000 splats
-  metal-gauss    4000 b=100k    2.15 min        34.938 dB    100,000 splats
-  metal-gauss    7000 b=100k    3.44 min        36.483 dB    100,000 splats
-  metal-gauss   15000 b=100k    6.93 min        37.737 dB    100,000 splats
+  metal-gauss     500 b=30k    0.23 min        24.870 dB     27,857 splats
+  metal-gauss    1000 b=100k    0.58 min        30.419 dB    100,000 splats
+  metal-gauss    2000 b=100k    1.07 min        33.086 dB    100,000 splats
+  metal-gauss    4000 b=100k    1.96 min        35.114 dB    100,000 splats
+  metal-gauss    7000 b=100k    3.19 min        36.522 dB    100,000 splats
+  metal-gauss   15000 b=100k    7.15 min        37.762 dB    100,000 splats
 
--> bench/results/sweep8/hotdog_metal-gauss.json
+-> /private/tmp/claude-501/-Users-metzgern/d957f3bf-ebf5-45b7-b9dd-ff9331200be5/scratchpad/mg/bench/results/sweep8/hotdog_metal-gauss.json

@@ -1,8 +1,8 @@
-  metal-gauss     500 b=30k    0.36 min        19.763 dB     27,857 splats
-  metal-gauss    1000 b=100k    0.65 min        24.314 dB    100,000 splats
-  metal-gauss    2000 b=100k    1.08 min        26.505 dB    100,000 splats
-  metal-gauss    4000 b=100k    1.89 min        28.530 dB    100,000 splats
-  metal-gauss    7000 b=100k    3.05 min        29.289 dB    100,000 splats
-  metal-gauss   15000 b=100k    6.56 min        30.063 dB    100,000 splats
+  metal-gauss     500 b=30k    0.25 min        19.840 dB     27,857 splats
+  metal-gauss    1000 b=100k    0.58 min        24.196 dB    100,000 splats
+  metal-gauss    2000 b=100k    1.11 min        26.649 dB    100,000 splats
+  metal-gauss    4000 b=100k    1.94 min        28.550 dB    100,000 splats
+  metal-gauss    7000 b=100k    3.22 min        29.377 dB    100,000 splats
+  metal-gauss   15000 b=100k    7.10 min        30.050 dB    100,000 splats
 
--> bench/results/sweep8/ship_metal-gauss.json
+-> /private/tmp/claude-501/-Users-metzgern/d957f3bf-ebf5-45b7-b9dd-ff9331200be5/scratchpad/mg/bench/results/sweep8/ship_metal-gauss.json

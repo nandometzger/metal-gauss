@@ -16,73 +16,73 @@
 <text class="ti" x="14" y="22" font-size="13" font-weight="700">metal-gauss minus competitor, paired per scene (n=8)</text>
 <line class="gr" x1="220.7" y1="46" x2="220.7" y2="310"/>
 <text class="tx" x="220.7" y="326" font-size="10.5" text-anchor="middle">+0</text>
-<line class="gr" x1="291.0" y1="46" x2="291.0" y2="310"/>
-<text class="tx" x="291.0" y="326" font-size="10.5" text-anchor="middle">+2</text>
-<line class="gr" x1="361.3" y1="46" x2="361.3" y2="310"/>
-<text class="tx" x="361.3" y="326" font-size="10.5" text-anchor="middle">+4</text>
-<line class="gr" x1="431.5" y1="46" x2="431.5" y2="310"/>
-<text class="tx" x="431.5" y="326" font-size="10.5" text-anchor="middle">+6</text>
-<line class="gr" x1="501.8" y1="46" x2="501.8" y2="310"/>
-<text class="tx" x="501.8" y="326" font-size="10.5" text-anchor="middle">+8</text>
-<line class="gr" x1="572.1" y1="46" x2="572.1" y2="310"/>
-<text class="tx" x="572.1" y="326" font-size="10.5" text-anchor="middle">+10</text>
-<line class="gr" x1="642.3" y1="46" x2="642.3" y2="310"/>
-<text class="tx" x="642.3" y="326" font-size="10.5" text-anchor="middle">+12</text>
+<line class="gr" x1="291.1" y1="46" x2="291.1" y2="310"/>
+<text class="tx" x="291.1" y="326" font-size="10.5" text-anchor="middle">+2</text>
+<line class="gr" x1="361.4" y1="46" x2="361.4" y2="310"/>
+<text class="tx" x="361.4" y="326" font-size="10.5" text-anchor="middle">+4</text>
+<line class="gr" x1="431.7" y1="46" x2="431.7" y2="310"/>
+<text class="tx" x="431.7" y="326" font-size="10.5" text-anchor="middle">+6</text>
+<line class="gr" x1="502.0" y1="46" x2="502.0" y2="310"/>
+<text class="tx" x="502.0" y="326" font-size="10.5" text-anchor="middle">+8</text>
+<line class="gr" x1="572.3" y1="46" x2="572.3" y2="310"/>
+<text class="tx" x="572.3" y="326" font-size="10.5" text-anchor="middle">+10</text>
+<line class="gr" x1="642.7" y1="46" x2="642.7" y2="310"/>
+<text class="tx" x="642.7" y="326" font-size="10.5" text-anchor="middle">+12</text>
 <line class="zero" x1="220.7" y1="42" x2="220.7" y2="310" stroke-width="1.5" stroke-dasharray="4 3"/>
 <text class="tx" x="220.7" y="38" font-size="10.5" text-anchor="middle">no difference</text>
 <text class="tx" x="440" y="342" font-size="11.5" text-anchor="middle">PSNR advantage (dB), 95% CI</text>
 <text class="ti" x="156" y="70.1" font-size="11.5" text-anchor="end">spirula-studio @ 500</text>
-<line class="c0" x1="440.2" y1="66.1" x2="545.1" y2="66.1" stroke-width="2.2" stroke-opacity="0.8" stroke-linecap="round"/>
-<line class="c0" x1="440.2" y1="62.1" x2="440.2" y2="70.1" stroke-width="1.6" stroke-opacity="0.8"/>
-<line class="c0" x1="545.1" y1="62.1" x2="545.1" y2="70.1" stroke-width="1.6" stroke-opacity="0.8"/>
-<circle class="c0" cx="492.7" cy="66.1" r="4.5"/>
-<text class="tx" x="720" y="70.1" font-size="10.5">+7.74  (8/8)</text>
+<line class="c0" x1="441.8" y1="66.1" x2="546.6" y2="66.1" stroke-width="2.2" stroke-opacity="0.8" stroke-linecap="round"/>
+<line class="c0" x1="441.8" y1="62.1" x2="441.8" y2="70.1" stroke-width="1.6" stroke-opacity="0.8"/>
+<line class="c0" x1="546.6" y1="62.1" x2="546.6" y2="70.1" stroke-width="1.6" stroke-opacity="0.8"/>
+<circle class="c0" cx="494.2" cy="66.1" r="4.5"/>
+<text class="tx" x="720" y="70.1" font-size="10.5">+7.78  (8/8)</text>
 <text class="ti" x="156" y="98.3" font-size="11.5" text-anchor="end">spirula-studio @ 7k</text>
-<line class="c0" x1="411.6" y1="94.3" x2="619.0" y2="94.3" stroke-width="2.2" stroke-opacity="0.8" stroke-linecap="round"/>
-<line class="c0" x1="411.6" y1="90.3" x2="411.6" y2="98.3" stroke-width="1.6" stroke-opacity="0.8"/>
-<line class="c0" x1="619.0" y1="90.3" x2="619.0" y2="98.3" stroke-width="1.6" stroke-opacity="0.8"/>
-<circle class="c0" cx="515.3" cy="94.3" r="4.5"/>
-<text class="tx" x="720" y="98.3" font-size="10.5">+8.39  (8/8)</text>
+<line class="c0" x1="413.2" y1="94.3" x2="621.3" y2="94.3" stroke-width="2.2" stroke-opacity="0.8" stroke-linecap="round"/>
+<line class="c0" x1="413.2" y1="90.3" x2="413.2" y2="98.3" stroke-width="1.6" stroke-opacity="0.8"/>
+<line class="c0" x1="621.3" y1="90.3" x2="621.3" y2="98.3" stroke-width="1.6" stroke-opacity="0.8"/>
+<circle class="c0" cx="517.3" cy="94.3" r="4.5"/>
+<text class="tx" x="720" y="98.3" font-size="10.5">+8.43  (8/8)</text>
 <text class="ti" x="156" y="126.6" font-size="11.5" text-anchor="end">spirula-studio @ 15k</text>
-<line class="c0" x1="216.1" y1="122.6" x2="411.5" y2="122.6" stroke-width="2.2" stroke-opacity="0.8" stroke-linecap="round"/>
+<line class="c0" x1="216.1" y1="122.6" x2="411.8" y2="122.6" stroke-width="2.2" stroke-opacity="0.8" stroke-linecap="round"/>
 <line class="c0" x1="216.1" y1="118.6" x2="216.1" y2="126.6" stroke-width="1.6" stroke-opacity="0.8"/>
-<line class="c0" x1="411.5" y1="118.6" x2="411.5" y2="126.6" stroke-width="1.6" stroke-opacity="0.8"/>
-<circle class="c0" cx="313.8" cy="122.6" r="4.5"/>
+<line class="c0" x1="411.8" y1="118.6" x2="411.8" y2="126.6" stroke-width="1.6" stroke-opacity="0.8"/>
+<circle class="c0" cx="314.0" cy="122.6" r="4.5"/>
 <text class="warn" x="720" y="126.6" font-size="10.5">+2.65  (7/8)  crosses 0</text>
 <text class="ti" x="156" y="154.8" font-size="11.5" text-anchor="end">Brush @ 500</text>
-<line class="c1" x1="435.0" y1="150.8" x2="615.4" y2="150.8" stroke-width="2.2" stroke-opacity="0.8" stroke-linecap="round"/>
-<line class="c1" x1="435.0" y1="146.8" x2="435.0" y2="154.8" stroke-width="1.6" stroke-opacity="0.8"/>
-<line class="c1" x1="615.4" y1="146.8" x2="615.4" y2="154.8" stroke-width="1.6" stroke-opacity="0.8"/>
-<circle class="c1" cx="525.2" cy="150.8" r="4.5"/>
-<text class="tx" x="720" y="154.8" font-size="10.5">+8.67  (8/8)</text>
+<line class="c1" x1="435.9" y1="150.8" x2="617.7" y2="150.8" stroke-width="2.2" stroke-opacity="0.8" stroke-linecap="round"/>
+<line class="c1" x1="435.9" y1="146.8" x2="435.9" y2="154.8" stroke-width="1.6" stroke-opacity="0.8"/>
+<line class="c1" x1="617.7" y1="146.8" x2="617.7" y2="154.8" stroke-width="1.6" stroke-opacity="0.8"/>
+<circle class="c1" cx="526.8" cy="150.8" r="4.5"/>
+<text class="tx" x="720" y="154.8" font-size="10.5">+8.70  (8/8)</text>
 <text class="ti" x="156" y="183.0" font-size="11.5" text-anchor="end">Brush @ 7k</text>
-<line class="c1" x1="368.2" y1="179.0" x2="539.5" y2="179.0" stroke-width="2.2" stroke-opacity="0.8" stroke-linecap="round"/>
-<line class="c1" x1="368.2" y1="175.0" x2="368.2" y2="183.0" stroke-width="1.6" stroke-opacity="0.8"/>
-<line class="c1" x1="539.5" y1="175.0" x2="539.5" y2="183.0" stroke-width="1.6" stroke-opacity="0.8"/>
-<circle class="c1" cx="453.9" cy="179.0" r="4.5"/>
-<text class="tx" x="720" y="183.0" font-size="10.5">+6.64  (8/8)</text>
+<line class="c1" x1="370.4" y1="179.0" x2="541.1" y2="179.0" stroke-width="2.2" stroke-opacity="0.8" stroke-linecap="round"/>
+<line class="c1" x1="370.4" y1="175.0" x2="370.4" y2="183.0" stroke-width="1.6" stroke-opacity="0.8"/>
+<line class="c1" x1="541.1" y1="175.0" x2="541.1" y2="183.0" stroke-width="1.6" stroke-opacity="0.8"/>
+<circle class="c1" cx="455.8" cy="179.0" r="4.5"/>
+<text class="tx" x="720" y="183.0" font-size="10.5">+6.68  (8/8)</text>
 <text class="ti" x="156" y="211.2" font-size="11.5" text-anchor="end">Brush @ 15k</text>
-<line class="c1" x1="290.1" y1="207.2" x2="497.5" y2="207.2" stroke-width="2.2" stroke-opacity="0.8" stroke-linecap="round"/>
-<line class="c1" x1="290.1" y1="203.2" x2="290.1" y2="211.2" stroke-width="1.6" stroke-opacity="0.8"/>
-<line class="c1" x1="497.5" y1="203.2" x2="497.5" y2="211.2" stroke-width="1.6" stroke-opacity="0.8"/>
-<circle class="c1" cx="393.8" cy="207.2" r="4.5"/>
+<line class="c1" x1="290.6" y1="207.2" x2="497.4" y2="207.2" stroke-width="2.2" stroke-opacity="0.8" stroke-linecap="round"/>
+<line class="c1" x1="290.6" y1="203.2" x2="290.6" y2="211.2" stroke-width="1.6" stroke-opacity="0.8"/>
+<line class="c1" x1="497.4" y1="203.2" x2="497.4" y2="211.2" stroke-width="1.6" stroke-opacity="0.8"/>
+<circle class="c1" cx="394.0" cy="207.2" r="4.5"/>
 <text class="tx" x="720" y="211.2" font-size="10.5">+4.93  (8/8)</text>
 <text class="ti" x="156" y="239.4" font-size="11.5" text-anchor="end">msplat @ 500</text>
-<line class="c2" x1="445.9" y1="235.4" x2="555.6" y2="235.4" stroke-width="2.2" stroke-opacity="0.8" stroke-linecap="round"/>
-<line class="c2" x1="445.9" y1="231.4" x2="445.9" y2="239.4" stroke-width="1.6" stroke-opacity="0.8"/>
-<line class="c2" x1="555.6" y1="231.4" x2="555.6" y2="239.4" stroke-width="1.6" stroke-opacity="0.8"/>
-<circle class="c2" cx="500.7" cy="235.4" r="4.5"/>
-<text class="tx" x="720" y="239.4" font-size="10.5">+7.97  (8/8)</text>
+<line class="c2" x1="447.2" y1="235.4" x2="557.4" y2="235.4" stroke-width="2.2" stroke-opacity="0.8" stroke-linecap="round"/>
+<line class="c2" x1="447.2" y1="231.4" x2="447.2" y2="239.4" stroke-width="1.6" stroke-opacity="0.8"/>
+<line class="c2" x1="557.4" y1="231.4" x2="557.4" y2="239.4" stroke-width="1.6" stroke-opacity="0.8"/>
+<circle class="c2" cx="502.3" cy="235.4" r="4.5"/>
+<text class="tx" x="720" y="239.4" font-size="10.5">+8.01  (8/8)</text>
 <text class="ti" x="156" y="267.7" font-size="11.5" text-anchor="end">msplat @ 7k</text>
-<line class="c2" x1="410.3" y1="263.7" x2="608.6" y2="263.7" stroke-width="2.2" stroke-opacity="0.8" stroke-linecap="round"/>
-<line class="c2" x1="410.3" y1="259.7" x2="410.3" y2="267.7" stroke-width="1.6" stroke-opacity="0.8"/>
-<line class="c2" x1="608.6" y1="259.7" x2="608.6" y2="267.7" stroke-width="1.6" stroke-opacity="0.8"/>
-<circle class="c2" cx="509.5" cy="263.7" r="4.5"/>
-<text class="tx" x="720" y="267.7" font-size="10.5">+8.22  (8/8)</text>
+<line class="c2" x1="412.2" y1="263.7" x2="610.6" y2="263.7" stroke-width="2.2" stroke-opacity="0.8" stroke-linecap="round"/>
+<line class="c2" x1="412.2" y1="259.7" x2="412.2" y2="267.7" stroke-width="1.6" stroke-opacity="0.8"/>
+<line class="c2" x1="610.6" y1="259.7" x2="610.6" y2="267.7" stroke-width="1.6" stroke-opacity="0.8"/>
+<circle class="c2" cx="511.4" cy="263.7" r="4.5"/>
+<text class="tx" x="720" y="267.7" font-size="10.5">+8.27  (8/8)</text>
 <text class="ti" x="156" y="295.9" font-size="11.5" text-anchor="end">msplat @ 15k</text>
-<line class="c2" x1="486.6" y1="291.9" x2="676.9" y2="291.9" stroke-width="2.2" stroke-opacity="0.8" stroke-linecap="round"/>
-<line class="c2" x1="486.6" y1="287.9" x2="486.6" y2="295.9" stroke-width="1.6" stroke-opacity="0.8"/>
-<line class="c2" x1="676.9" y1="287.9" x2="676.9" y2="295.9" stroke-width="1.6" stroke-opacity="0.8"/>
-<circle class="c2" cx="581.8" cy="291.9" r="4.5"/>
+<line class="c2" x1="487.3" y1="291.9" x2="676.8" y2="291.9" stroke-width="2.2" stroke-opacity="0.8" stroke-linecap="round"/>
+<line class="c2" x1="487.3" y1="287.9" x2="487.3" y2="295.9" stroke-width="1.6" stroke-opacity="0.8"/>
+<line class="c2" x1="676.8" y1="287.9" x2="676.8" y2="295.9" stroke-width="1.6" stroke-opacity="0.8"/>
+<circle class="c2" cx="582.1" cy="291.9" r="4.5"/>
 <text class="tx" x="720" y="295.9" font-size="10.5">+10.28  (8/8)</text>
 </svg>

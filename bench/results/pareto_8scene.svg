@@ -56,20 +56,20 @@
 <line class="ax" x1="62" y1="30" x2="62" y2="418"/>
 <text class="tx" x="366" y="458" font-size="12" text-anchor="middle">wall-clock (minutes, log scale)</text>
 <text class="tx" transform="translate(16,224) rotate(-90)" font-size="12" text-anchor="middle">PSNR (dB), 8-scene mean</text>
-<path class="s0" d="M201.4,232.6 L277.0,210.9 L326.8,148.7 L380.1,103.9 L427.0,77.0 L499.3,50.0" stroke-width="1" stroke-opacity="0.28"/>
-<path class="s0" d="M201.4,232.6 L277.0,210.9 L326.8,148.7 L380.1,103.9 L427.0,77.0 L499.3,50.0" stroke-width="2.4" stroke-linejoin="round" stroke-linecap="round" stroke-opacity="0.95"/>
-<line class="s0" x1="201.4" y1="247.5" x2="201.4" y2="217.7" stroke-width="1.2" stroke-opacity="0.5"/>
-<line class="s0" x1="277.0" y1="233.1" x2="277.0" y2="188.6" stroke-width="1.2" stroke-opacity="0.5"/>
-<line class="s0" x1="326.8" y1="169.1" x2="326.8" y2="128.3" stroke-width="1.2" stroke-opacity="0.5"/>
-<line class="s0" x1="380.1" y1="124.1" x2="380.1" y2="83.7" stroke-width="1.2" stroke-opacity="0.5"/>
-<line class="s0" x1="427.0" y1="98.8" x2="427.0" y2="55.2" stroke-width="1.2" stroke-opacity="0.5"/>
-<line class="s0" x1="499.3" y1="73.3" x2="499.3" y2="26.7" stroke-width="1.2" stroke-opacity="0.5"/>
-<circle class="f0" cx="201.4" cy="232.6" r="4"/>
-<circle class="f0" cx="277.0" cy="210.9" r="4"/>
-<circle class="f0" cx="326.8" cy="148.7" r="4"/>
-<circle class="f0" cx="380.1" cy="103.9" r="4"/>
-<circle class="f0" cx="427.0" cy="77.0" r="4"/>
-<circle class="f0" cx="499.3" cy="50.0" r="4"/>
+<path class="s0" d="M173.7,231.9 L269.4,210.5 L324.2,148.0 L380.2,103.7 L424.1,76.2 L498.8,49.9" stroke-width="1" stroke-opacity="0.28"/>
+<path class="s0" d="M173.7,231.9 L269.4,210.5 L324.2,148.0 L380.2,103.7 L424.1,76.2 L498.8,49.9" stroke-width="2.4" stroke-linejoin="round" stroke-linecap="round" stroke-opacity="0.95"/>
+<line class="s0" x1="173.7" y1="246.9" x2="173.7" y2="217.0" stroke-width="1.2" stroke-opacity="0.5"/>
+<line class="s0" x1="269.4" y1="232.6" x2="269.4" y2="188.5" stroke-width="1.2" stroke-opacity="0.5"/>
+<line class="s0" x1="324.2" y1="168.6" x2="324.2" y2="127.5" stroke-width="1.2" stroke-opacity="0.5"/>
+<line class="s0" x1="380.2" y1="124.5" x2="380.2" y2="83.0" stroke-width="1.2" stroke-opacity="0.5"/>
+<line class="s0" x1="424.1" y1="98.0" x2="424.1" y2="54.3" stroke-width="1.2" stroke-opacity="0.5"/>
+<line class="s0" x1="498.8" y1="73.3" x2="498.8" y2="26.6" stroke-width="1.2" stroke-opacity="0.5"/>
+<circle class="f0" cx="173.7" cy="231.9" r="4"/>
+<circle class="f0" cx="269.4" cy="210.5" r="4"/>
+<circle class="f0" cx="324.2" cy="148.0" r="4"/>
+<circle class="f0" cx="380.2" cy="103.7" r="4"/>
+<circle class="f0" cx="424.1" cy="76.2" r="4"/>
+<circle class="f0" cx="498.8" cy="49.9" r="4"/>
 <line class="s0" x1="678" y1="40" x2="696" y2="40" stroke-width="3"/>
 <text class="ti" x="702" y="44" font-size="12" font-weight="700">metal-gauss</text>
 <path class="s1" d="M212.6,369.1 L270.6,345.3 L348.1,305.8 L448.6,266.3 L549.0,224.9 L656.0,96.7" stroke-width="1" stroke-opacity="0.28"/>
