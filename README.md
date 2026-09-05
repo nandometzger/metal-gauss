@@ -144,8 +144,10 @@ surface. That is why the default sweep is small.
 
 ## ⚠️ Caveats
 
-- msplat is **1.3–1.8× faster per step** and owns every budget under ~0.3 min. Our floor there is
-  ~8.4 s of fixed startup.
+- msplat is **1.3–1.8× faster per step**. Our fixed startup at that end was ~8.4 s and is now
+  **~3 s**: 6.1 s of it was decoding PNGs, and 4.1 s of that decoded the 200 held-out views a run
+  without evaluation never reads. The budget rows above were measured before that and the
+  sub-0.3 min end has not been re-run.
 - 7 k numbers are **not comparable to published 30 k numbers** — 5.1 dB apart.
 - `--antialias` is off by default; worth **+6.68 dB at 200 px** render resolution.
 - Run-to-run noise floors: ours **0.19 dB**, Brush **0.74**, spirula **0.15–1.27**, msplat **3.35**

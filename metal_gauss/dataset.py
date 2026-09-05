@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -59,10 +60,46 @@ def downscaled(v: View, factor: int) -> View:
     return out
 
 
+class LazyViews(Sequence):
+    """Views whose count is known now and whose pixels are decoded on demand.
+
+    The held-out split of a Blender scene is 200 images, twice the training
+    set, and a run that never evaluates never reads one of them -- but decoding
+    them was 4.1 s of a 8.7 s startup. Counting frames needs only the JSON, so
+    length is answered without touching a PNG.
+
+    Materialisation happens once and the resulting View objects are kept:
+    `downscaled()` caches its pyramid on `id(view)`, so handing out fresh
+    objects per access would silently defeat that cache.
+    """
+
+    def __init__(self, count: int, materialise):
+        self._count = count
+        self._materialise = materialise
+        self._views: list[View] | None = None
+
+    def _all(self) -> list[View]:
+        if self._views is None:
+            self._views = self._materialise()
+            if len(self._views) != self._count:
+                raise RuntimeError(
+                    f"expected {self._count} views, decoded {len(self._views)}")
+        return self._views
+
+    def __len__(self) -> int:
+        return self._count
+
+    def __getitem__(self, i):
+        return self._all()[i]
+
+    def __iter__(self):
+        return iter(self._all())
+
+
 @dataclass
 class Scene:
-    train: list[View]
-    heldout: list[View]
+    train: Sequence[View]
+    heldout: Sequence[View]
     points: np.ndarray       # (P,3) sparse init
     colors: np.ndarray       # (P,3) in [0,1]
 
