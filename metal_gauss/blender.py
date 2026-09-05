@@ -24,60 +24,93 @@ from __future__ import annotations
 
 import json
 import math
+import os
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import numpy as np
 import torch
 
-from metal_gauss.dataset import Scene, View
+from metal_gauss.dataset import LazyViews, Scene, View
 
 # OpenGL -> OpenCV: negate the y and z basis vectors.
 _GL2CV = np.diag([1.0, -1.0, -1.0, 1.0]).astype(np.float32)
 
 
-def _load_split(root: Path, split: str, max_resolution: int) -> list[View]:
-    from PIL import Image
+def _frames(root: Path, split: str) -> tuple[float, list[tuple[Path, dict]]]:
+    """Everything about a split that can be known without decoding a pixel.
 
+    Existence filtering happens here so a caller can be told how many views a
+    split has -- and be told the truth about a scene with missing files --
+    while the images themselves are still on disk.
+    """
     meta = json.loads((root / f"transforms_{split}.json").read_text())
     angle_x = float(meta["camera_angle_x"])
-    views: list[View] = []
-
+    out = []
     for fr in meta["frames"]:
         p = root / (fr["file_path"].lstrip("./") + ".png")
-        if not p.exists():
-            continue
-        img = Image.open(p)
-        scale = min(1.0, max_resolution / max(img.size))
-        W, H = int(round(img.width * scale)), int(round(img.height * scale))
-        if (W, H) != img.size:
-            img = img.resize((W, H), Image.LANCZOS)
+        if p.exists():
+            out.append((p, fr))
+    return angle_x, out
 
-        a = np.asarray(img, dtype=np.float32) / 255.0
-        if a.shape[-1] == 4:                       # composite over white
-            rgb = a[..., :3] * a[..., 3:4] + (1.0 - a[..., 3:4])
-        else:
-            rgb = a[..., :3]
 
-        focal = 0.5 * W / math.tan(0.5 * angle_x)
-        K = torch.tensor([[focal, 0, W / 2], [0, focal, H / 2], [0, 0, 1.0]],
-                         dtype=torch.float32)
+def _decode(p: Path, fr: dict, angle_x: float, max_resolution: int) -> View:
+    from PIL import Image
 
-        c2w = np.array(fr["transform_matrix"], dtype=np.float32) @ _GL2CV
-        vm = torch.from_numpy(np.linalg.inv(c2w).astype(np.float32))
+    img = Image.open(p)
+    scale = min(1.0, max_resolution / max(img.size))
+    W, H = int(round(img.width * scale)), int(round(img.height * scale))
+    if (W, H) != img.size:
+        img = img.resize((W, H), Image.LANCZOS)
 
-        views.append(View(p.name,
-                          torch.from_numpy((rgb * 255).astype(np.uint8)),
-                          K, vm))
-    return views
+    a = np.asarray(img, dtype=np.float32) / 255.0
+    if a.shape[-1] == 4:                       # composite over white
+        rgb = a[..., :3] * a[..., 3:4] + (1.0 - a[..., 3:4])
+    else:
+        rgb = a[..., :3]
+
+    focal = 0.5 * W / math.tan(0.5 * angle_x)
+    K = torch.tensor([[focal, 0, W / 2], [0, focal, H / 2], [0, 0, 1.0]],
+                     dtype=torch.float32)
+
+    c2w = np.array(fr["transform_matrix"], dtype=np.float32) @ _GL2CV
+    vm = torch.from_numpy(np.linalg.inv(c2w).astype(np.float32))
+    return View(p.name, torch.from_numpy((rgb * 255).astype(np.uint8)), K, vm)
+
+
+def _decode_all(angle_x: float, frames: list[tuple[Path, dict]],
+                max_resolution: int) -> list[View]:
+    """Decode a split in parallel, in JSON order.
+
+    PIL releases the GIL for both decode and resize, so this is a real 3.4x on
+    ten cores. Order is the map's, not completion order: the trainer indexes
+    the training list with a seeded permutation, so a reordering here would
+    silently change which views a "reproducible" run trains on.
+    """
+    if not frames:
+        return []
+    workers = min(8, len(frames), os.cpu_count() or 1)
+    if workers == 1:
+        return [_decode(p, fr, angle_x, max_resolution) for p, fr in frames]
+    with ThreadPoolExecutor(workers) as pool:
+        return list(pool.map(
+            lambda a: _decode(a[0], a[1], angle_x, max_resolution), frames))
 
 
 def load_blender(root: str | Path, max_resolution: int = 800,
                  n_init: int = 100_000, seed: int = 0) -> Scene:
     root = Path(root)
-    train = _load_split(root, "train", max_resolution)
-    heldout = _load_split(root, "test", max_resolution)
+    train_angle, train_frames = _frames(root, "train")
+    test_angle, test_frames = _frames(root, "test")
+    train = _decode_all(train_angle, train_frames, max_resolution)
     if not train:
         raise FileNotFoundError(f"no training frames under {root}")
+
+    # Held out until something asks. A benchmark run with `eval_every` past
+    # `steps` never does, and on lego that is 200 images and 4.1 s.
+    heldout = LazyViews(
+        len(test_frames),
+        lambda: _decode_all(test_angle, test_frames, max_resolution))
 
     # No sparse cloud in these scenes. The 3DGS papers initialise from a
     # uniform cube; its extent is set from the camera ring so the scale is not

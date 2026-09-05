@@ -1,10 +1,10 @@
 {
   "schema": 1,
   "env": {
-    "git": "f0e2d68",
+    "git": "e820561",
     "dirty": true,
-    "torch": "2.13.0",
-    "platform": "macOS-26.5.2-arm64-arm-64bit",
+    "torch": "2.14.0",
+    "platform": "macOS-26.6.2-arm64-arm-64bit",
     "machine": "arm64"
   },
   "config": {
@@ -15,23 +15,23 @@
   },
   "rows": [
     {
-      "harness_s": 26.0,
-      "train_s": 17.6,
-      "startup_s": 8.4,
+      "harness_s": 20.1,
+      "train_s": 17.0,
+      "startup_s": 3.1,
       "run": 0,
       "ext_cold": true
     },
     {
-      "harness_s": 14.6,
-      "train_s": 5.9,
-      "startup_s": 8.7,
+      "harness_s": 8.1,
+      "train_s": 4.7,
+      "startup_s": 3.4,
       "run": 1,
       "ext_cold": false
     },
     {
-      "harness_s": 14.2,
-      "train_s": 5.6,
-      "startup_s": 8.6,
+      "harness_s": 7.7,
+      "train_s": 4.7,
+      "startup_s": 3.0,
       "run": 2,
       "ext_cold": false
     }
