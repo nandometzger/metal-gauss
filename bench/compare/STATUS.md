@@ -40,9 +40,13 @@ This exists because it did not. `msplat_bin()` defaulted to
 time anyone tried to reproduce the competitor half of the README, all three
 binaries were gone. The install knowledge below was prose, not a script.
 
-spirula builds from source and its exact working incantation was never
-recorded here, so that installer is the ordinary CMake build and reports
-failure loudly rather than pretending. The traps below still apply.
+spirula's build has one non-obvious flag. `SS_BACKEND` defaults to `cuda`
+(`cmake/SsOptions.cmake`), so a plain `cmake -S . -B build` on a Mac fails
+inside `CMakeDetermineCUDACompiler` hunting a CUDA toolkit that cannot exist
+here. `-DSS_BACKEND=vulkan` selects the MoltenVK path, which is what the
+benchmarked build used. The installer passes it; this paragraph exists because
+that flag was not written down anywhere and had to be recovered from the
+project's own CMake.
 
 ## Real scene trainers (benchmarkable)
 

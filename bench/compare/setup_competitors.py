@@ -136,10 +136,14 @@ def install_spirula() -> bool:
             return False
     head = _run(["git", "-C", str(src), "rev-parse", "HEAD"], capture_output=True)
     build = src / "build"
+    # SS_BACKEND defaults to "cuda" (cmake/SsOptions.cmake), so a plain
+    # `cmake -S . -B build` on a Mac fails in CMakeDetermineCUDACompiler
+    # looking for a CUDA toolkit that cannot exist here. The Vulkan backend is
+    # the one that runs on MoltenVK, and is what the benchmarked build used.
     if _run(["cmake", "-S", str(src), "-B", str(build),
-             "-DCMAKE_BUILD_TYPE=Release"]).returncode:
-        print("    cmake configure failed. spirula needs Vulkan/MoltenVK; see "
-              "bench/compare/STATUS.md")
+             "-DCMAKE_BUILD_TYPE=Release", "-DSS_BACKEND=vulkan"]).returncode:
+        print("    cmake configure failed. spirula needs the Vulkan SDK / "
+              "MoltenVK; see bench/compare/STATUS.md")
         return False
     if _run(["cmake", "--build", str(build), "--parallel"]).returncode:
         print("    build failed; see bench/compare/STATUS.md")
