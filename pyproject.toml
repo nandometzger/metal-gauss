@@ -15,7 +15,21 @@ classifiers = [
     "Topic :: Scientific/Engineering :: Image Processing",
     "Topic :: Multimedia :: Graphics :: 3D Rendering",
 ]
-dependencies = ["torch>=2.5", "numpy>=1.26", "plyfile>=1.0", "ninja>=1.11"]
+# pillow and scipy are not optional despite being imported lazily: every scene
+# loader decodes images through PIL, and init_params() -- which train() calls
+# unconditionally -- needs scipy.spatial.cKDTree for the knn scale init. With
+# them in an extra, `pip install metal-gauss && metal-gauss-train` failed at
+# the first scene it was pointed at, which is the only thing the console
+# scripts this package declares are for. pycolmap stays optional: it is needed
+# only for COLMAP scenes, and Blender scenes never touch it.
+dependencies = [
+    "torch>=2.5",
+    "numpy>=1.26",
+    "plyfile>=1.0",
+    "ninja>=1.11",
+    "pillow>=10.0",
+    "scipy>=1.11",
+]
 
 [project.urls]
 Homepage = "https://github.com/nandometzger/metal-gauss"
@@ -28,7 +42,7 @@ metal-gauss-render = "metal_gauss.render_path:main"
 
 [project.optional-dependencies]
 bench = ["pycolmap>=3.10"]
-train = ["pycolmap>=3.10", "pillow>=10.0", "scipy>=1.11"]
+train = ["pycolmap>=3.10"]      # pillow/scipy moved to core; kept for compatibility
 test = ["pytest>=8.0"]
 
 [build-system]
