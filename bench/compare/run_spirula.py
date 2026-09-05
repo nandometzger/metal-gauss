@@ -33,7 +33,7 @@ import time
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
-from bench.paths import spirula_bin  # noqa: E402
+from bench.paths import competitor_versions, spirula_bin  # noqa: E402
 
 BIN = Path(spirula_bin())
 RESULTS = ROOT / "bench" / "results"
@@ -116,6 +116,12 @@ def main() -> None:
         row = {"impl": "spirula", "iters": n, "resolved_steps": got,
                "preset": a.preset, "ok": s.get("psnr") is not None,
                "wall_s": round(wall, 1), **s}
+        # Same stamp pareto.py puts on the other competitors. Missing it here
+        # meant spirula rows stayed unattributable while msplat and brush
+        # became reproducible, which is a worse state than either.
+        build = competitor_versions().get("spirula")
+        if build:
+            row["build"] = build
         if got != n:
             row["divergence"] = f"requested {n} steps, checkpoint says {got}"
             print(f"    [DIVERGENCE] {row['divergence']}", flush=True)
