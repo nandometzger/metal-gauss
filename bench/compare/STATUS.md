@@ -22,6 +22,28 @@ and those are CUDA papers rather than Mac projects -- adopting one is engineerin
 benchmark. The distinction matters because a technique from row two can be adopted, while a
 project in row one can only be beaten or lost to.
 
+## Installing them
+
+```bash
+python bench/compare/setup_competitors.py --check   # what is present
+python bench/compare/setup_competitors.py           # install what is not
+```
+
+Versions are pinned in that script, not resolved to "latest" at install time,
+and what it installed is written to `$METAL_GAUSS_THIRD_PARTY/versions.json`
+(default `~/third_party`). `bench/compare/pareto.py` stamps that record onto
+every competitor row, so a published number can name the build that produced
+it.
+
+This exists because it did not. `msplat_bin()` defaulted to
+`/tmp/cmp_msplat/bin/msplat-train`; /tmp does not survive a reboot, and by the
+time anyone tried to reproduce the competitor half of the README, all three
+binaries were gone. The install knowledge below was prose, not a script.
+
+spirula builds from source and its exact working incantation was never
+recorded here, so that installer is the ordinary CMake build and reports
+failure loudly rather than pretending. The traps below still apply.
+
 ## Real scene trainers (benchmarkable)
 
 | project | install | status |
