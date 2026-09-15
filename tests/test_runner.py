@@ -50,6 +50,21 @@ def test_unspecified_knob_is_not_forwarded():
     assert cmd.count("--report") == 1
 
 
+def test_a_run_with_the_live_viewer_is_refused():
+    """Preview renders share the GPU with training, so its timings mean nothing.
+
+    Nobody asks the harness for --viewer, so comparing requested against
+    resolved would never notice one. The trainer records it; this reads it.
+    """
+    bad = check({"steps": 7000}, _report(viewer=True))
+    assert bad and "viewer" in bad[0]
+
+
+def test_a_run_without_the_live_viewer_is_accepted():
+    assert check({"steps": 7000}, _report(viewer=False)) == []
+    assert check({"steps": 7000}, _report()) == [], "reports from before --viewer"
+
+
 def test_divergence_between_requested_and_actual_is_fatal():
     """Request 100k, have the trainer report 300k -> must be caught.
 

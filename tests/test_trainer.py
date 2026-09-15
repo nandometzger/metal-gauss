@@ -334,6 +334,64 @@ def test_lr_scene_scaled_can_be_switched_off(monkeypatch, flags, expected):
     assert seen["lr_scene_scaled"] is expected
 
 
+def test_the_viewer_flag_without_viser_stops_before_loading_anything(monkeypatch):
+    """Missing the extra must cost a second, not a scene load and then a crash."""
+    import sys
+
+    import metal_gauss.train as train_mod
+
+    monkeypatch.setitem(sys.modules, "viser", None)
+    monkeypatch.setattr(train_mod, "train", lambda args: pytest.fail("train() ran"))
+    monkeypatch.setattr(sys, "argv",
+                        ["metal-gauss-train", "--blender", "unused", "--viewer"])
+    with pytest.raises(SystemExit, match=r"metal-gauss\[viewer\]"):
+        train_mod.main()
+
+
+def test_run_report_records_preview_and_paused_time():
+    import argparse
+
+    from metal_gauss.train import _run_report
+
+    out = _run_report(argparse.Namespace(steps=10, budget=100), [], 1.0, 100,
+                      preview_s=0.25, paused_s=3.0)
+    assert out["metrics"]["preview_s"] == 0.25
+    assert out["metrics"]["paused_s"] == 3.0
+
+
+@mps
+def test_the_live_preview_renders_exactly_what_training_renders():
+    """Same activations, same slice, same filter, same SH degree, same pixels."""
+    from metal_gauss.dataset import View
+    from metal_gauss.render_path import intrinsics, look_at, world_to_camera
+    from metal_gauss.train import render_view, splat_batch
+    from metal_gauss.viewer import render_view as preview_render
+
+    g = torch.Generator().manual_seed(5)
+    n, active = 4000, 3000
+    means = torch.randn(n, 3, generator=g) * 0.4 + torch.tensor([0.0, 0.0, 3.0])
+    p = {k: t.to("mps").requires_grad_(True) for k, t in {
+        "means": means,
+        "log_scales": torch.randn(n, 3, generator=g) * 0.3 - 3.5,
+        "quats": torch.nn.functional.normalize(torch.randn(n, 4, generator=g), dim=1),
+        "logit_opac": torch.randn(n, generator=g),
+        "sh_dc": torch.randn(n, 1, 3, generator=g) * 0.5,
+        "sh_rest": torch.randn(n, 15, 3, generator=g) * 0.1,
+    }.items()}
+    filter_3d = (torch.rand(n, generator=g) * 0.01).to("mps")
+    eye = torch.tensor([0.3, -0.2, 0.0])
+    vm = world_to_camera(look_at(eye, torch.tensor([0.0, 0.0, 3.0])), eye)
+    W, H = 128, 96
+    v = View("synthetic", torch.zeros(H, W, 3, dtype=torch.uint8), intrinsics(W, H, 50.0), vm)
+
+    trained, _, _ = render_view(p, v, active, 1, (1.0, 1.0, 1.0), antialias=True,
+                                filter_3d=filter_3d)
+    with torch.no_grad():
+        previewed = preview_render(splat_batch(p, active, 1, True, filter_3d),
+                                   vm, v.K, W, H, (1.0, 1.0, 1.0), far=100.0)
+    assert torch.equal(trained.detach().clamp(0.0, 1.0), previewed)
+
+
 def test_run_report_records_the_installed_package_version():
     """A pip install has no .git, so the version is the only build identity."""
     import argparse

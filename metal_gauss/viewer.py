@@ -236,6 +236,46 @@ class PreviewBudget:
         self._frames.append((now, seconds))
 
 
+class TrainClock:
+    """Training wall-clock that stops while the viewer has training paused.
+
+    wall_s, ms/step and the stall detector all read this, so a pause neither
+    inflates a reported time nor reads as the machine having gone to sleep.
+    """
+
+    def __init__(self, now: Callable[[], float] = time.perf_counter) -> None:
+        self._now = now
+        self._start = now()
+        self._paused_at: float | None = None
+        self.paused_s = 0.0
+
+    def pause(self) -> None:
+        if self._paused_at is None:
+            self._paused_at = self._now()
+
+    def resume(self) -> None:
+        if self._paused_at is not None:
+            self.paused_s += self._now() - self._paused_at
+            self._paused_at = None
+
+    def elapsed(self) -> float:
+        end = self._paused_at if self._paused_at is not None else self._now()
+        return end - self._start - self.paused_s
+
+
+def infer_up(viewmats) -> torch.Tensor:
+    """World up from a camera rig: the normalised mean of the cameras' up vectors.
+
+    Captures hold the camera roughly level, so each camera's image-up is close
+    to world up, and around a rig the individual tilts cancel. That is right
+    for a Blender ring (Z up) and a hand-held COLMAP walk-around alike, so the
+    trainer's viewer needs no --up. Row 1 of a world-to-camera matrix is the
+    camera's down axis in world coordinates.
+    """
+    up = -torch.stack([vm[1, :3] for vm in viewmats]).mean(dim=0)
+    return up / torch.linalg.norm(up)
+
+
 # --------------------------------------------------------------- rendering
 
 @dataclasses.dataclass(frozen=True)
@@ -332,7 +372,8 @@ class LiveView:
     def __init__(self, viser, source: Callable[[], SplatBatch], *, eye: torch.Tensor,
                  target: torch.Tensor, up, background, far: float, host: str, port: int,
                  max_resolution: int = 1024, fov_h: float | None = None,
-                 fov_v: float | None = None, world_flip: torch.Tensor | None = None) -> None:
+                 fov_v: float | None = None, world_flip: torch.Tensor | None = None,
+                 warm_up: bool = True) -> None:
         self.source = source
         self.fov_h, self.fov_v = fov_h, fov_v
         self.flip = world_flip
@@ -345,10 +386,12 @@ class LiveView:
         self._rr = 0
 
         # Build the Metal extension here, before any client can ask for a frame:
-        # nothing in metal_backend._load guards a second caller.
-        with torch.no_grad():
-            render_view(source(), world_to_camera(torch.eye(3), eye),
-                        intrinsics_vfov(16, 16, 1.0), 16, 16, background, far)
+        # nothing in metal_backend._load guards a second caller. A trainer skips
+        # this: it renders on the same thread and builds the extension anyway.
+        if warm_up:
+            with torch.no_grad():
+                render_view(source(), world_to_camera(torch.eye(3), eye),
+                            intrinsics_vfov(16, 16, 1.0), 16, 16, background, far)
 
         up_vector = _UP_VECTORS[up] if isinstance(up, str) else tuple(float(v) for v in up)
         self.server = viser.ViserServer(host=host, port=port)
@@ -538,6 +581,122 @@ class LiveView:
         self.readout.content = text
         if self.status.content:
             self.status.content = ""
+
+
+class TrainingView(LiveView):
+    """The live preview of a model while it trains.
+
+    The trainer calls `after_step` once per step, on its own thread. With no
+    browser connected that returns at once and costs nothing. Otherwise it
+    marks every client's frame stale, since the splats just moved, and renders
+    at most one frame, and only if PreviewBudget allows. `hold` blocks while
+    the Pause button is down, rendering with the whole GPU, lens included.
+    """
+
+    STATS_EVERY_S = 0.25
+    LOSS_EVERY_S = 0.5      # loss.item() synchronises the queue; not every step
+
+    def __init__(self, viser, scene, source: Callable[[], SplatBatch], *, background,
+                 host: str, port: int, budget: float) -> None:
+        first = scene.train[0]
+        c2w = first.viewmat[:3, :3].T
+        eye = -c2w @ first.viewmat[:3, 3]
+        points = torch.as_tensor(scene.points, dtype=torch.float32)
+        depth = max(float((points.mean(dim=0) - eye) @ c2w[:, 2]), 1e-3)
+        target = eye + c2w[:, 2] * depth
+        fov_v = 2.0 * math.atan(0.5 * int(first.image.shape[0]) / float(first.K[1, 1]))
+        super().__init__(viser, source, eye=eye, target=target,
+                         up=infer_up([v.viewmat for v in scene.train]),
+                         background=background, far=scene_far(points, eye, target),
+                         host=host, port=port, fov_v=fov_v, warm_up=False)
+
+        self.budget = PreviewBudget(budget)
+        self.paused = False
+        self._stats: dict = {}
+        self._stats_at = -math.inf
+        self._loss_at = -math.inf
+
+        gui = self.server.gui
+        with gui.add_folder("Training", order=-1.0):
+            self.stats = gui.add_markdown("waiting for the first step")
+            self.pause_button = gui.add_button("Pause")
+            self.budget_slider = gui.add_slider(
+                "Preview budget", min=0.0, max=0.5, step=0.01, initial_value=budget,
+                hint="largest share of wall-clock the preview may take while training runs")
+
+        @self.pause_button.on_click
+        def _(_) -> None:
+            self.paused = not self.paused
+            self.pause_button.label = "Resume" if self.paused else "Pause"
+            self.wake.set()
+
+        @self.budget_slider.on_update
+        def _(_) -> None:
+            self.budget.fraction = float(self.budget_slider.value)
+
+    def after_step(self, step: int, active: int, loss: torch.Tensor, clock: TrainClock) -> None:
+        if not self.clients:
+            return
+        now = time.monotonic()
+        if now - self._loss_at >= self.LOSS_EVERY_S:
+            self._stats["loss"] = float(loss.item())
+            self._loss_at = now
+        if now - self._stats_at >= self.STATS_EVERY_S:
+            elapsed = clock.elapsed()
+            self._stats.update(step=step, active=active, ms_step=1000.0 * elapsed / step,
+                               share=self.preview_s / max(elapsed, 1e-9))
+            self._show_stats()
+            self._stats_at = now
+        self.invalidate_all()
+        self.pump(max_jobs=1, budget=self.budget, lens=False)
+
+    def hold(self, clock: TrainClock) -> None:
+        """Block while paused. Paused time is not training time."""
+        if not self.paused:
+            return
+        clock.pause()
+        self.set_status("paused")
+        try:
+            while self.paused:
+                self.wake.clear()
+                if self.pump() == 0:
+                    self.wake.wait(timeout=self.next_wait() or 0.5)
+        finally:
+            clock.resume()
+            self.set_status(None)
+
+    def set_status(self, text: str | None) -> None:
+        self._stats["status"] = text
+        self._show_stats()
+
+    def set_psnr(self, psnr: float) -> None:
+        self._stats["psnr"] = psnr
+        self.set_status(None)
+
+    def finish(self) -> None:
+        """Training is over: keep showing the final model until Ctrl-C."""
+        self.set_status("training finished · Ctrl-C to exit")
+        self.invalidate_all()
+        self.serve_forever()
+
+    def _show_stats(self) -> None:
+        s = self._stats
+        lines = []
+        if "step" in s:
+            lines.append(f"step {s['step']:,} · {s['active']:,} splats · "
+                         f"{s['ms_step']:.0f} ms/step")
+        parts = []
+        if "loss" in s:
+            parts.append(f"loss {s['loss']:.4f}")
+        if "psnr" in s:
+            parts.append(f"held-out {s['psnr']:.2f} dB")
+        if parts:
+            lines.append(" · ".join(parts))
+        if "share" in s:
+            lines.append(f"preview {s['share']:.0%} of wall-clock")
+        if s.get("status"):
+            lines.append(f"**{s['status']}**")
+        self.stats.content = "  \n".join(lines) or "waiting for the first step"
 
 
 def main(argv: list[str] | None = None) -> int:

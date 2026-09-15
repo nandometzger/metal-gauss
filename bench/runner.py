@@ -131,6 +131,9 @@ def check(spec: dict, report: dict) -> list[str]:
         raise RunFailed("report has no 'resolved' block -- trainer too old? "
                         "Every benchmarked number needs one.")
     bad = []
+    if resolved.get("viewer"):
+        bad.append("viewer: the live preview shares the GPU with training, so this "
+                   "run's timings are not comparable")
     for k, want in spec.items():
         if want is None or k not in resolved:
             continue
