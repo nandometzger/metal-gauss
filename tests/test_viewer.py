@@ -497,6 +497,28 @@ def test_lazy_views_report_whether_they_have_been_decoded():
     assert views.materialised and decodes == [1]
 
 
+def test_stats_survive_a_snap_ending_on_another_thread(monkeypatch):
+    """Click and camera callbacks drop the 'view' line on viser's threads.
+
+    Checking for the key and then reading it raced with that: the line could
+    vanish between the two and raise KeyError on the training thread.
+    """
+    from types import SimpleNamespace as NS
+
+    class SnapEndsMidRead(dict):
+        def get(self, key, default=None):
+            value = super().get(key, default)
+            if key == "view":
+                self.pop("view", None)       # the callback thread wins the race
+            return value
+
+    live, _ = _fake_live(monkeypatch, "TrainingView")
+    live.stats = NS(content="")
+    live._stats = SnapEndsMidRead(step=10, active=5, ms_step=20.0, view="view r_0.png: 30 dB")
+    live._show_stats()
+    assert "step 10" in live.stats.content
+
+
 def test_missing_viser_names_the_extra(monkeypatch):
     monkeypatch.setitem(sys.modules, "viser", None)
     with pytest.raises(SystemExit, match=r"metal-gauss\[viewer\]"):

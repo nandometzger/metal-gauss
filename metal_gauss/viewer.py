@@ -1005,7 +1005,9 @@ class TrainingView(LiveView):
         self.serve_forever()
 
     def _show_stats(self) -> None:
-        s = self._stats
+        # A copy: click and camera callbacks drop "view" on viser's threads, and
+        # a check-then-read on the live dict raced with that.
+        s = dict(self._stats)
         lines = []
         if "step" in s:
             lines.append(f"step {s['step']:,} · {s['active']:,} splats · "
