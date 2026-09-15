@@ -18,6 +18,7 @@ import torch
 
 from metal_gauss.render_path import _GL2CV, intrinsics, render_frames
 from metal_gauss.viewer import (
+    PreviewBudget,
     RenderScheduler,
     frame_size,
     import_viser,
@@ -196,6 +197,58 @@ def test_a_failed_frame_waits_for_the_next_change():
     assert s.next_job(2.0, 96) is not None
 
 
+def test_a_changed_model_gets_a_new_full_frame_not_a_preview():
+    """Training moves the splats under a still camera; that is not camera motion."""
+    s = RenderScheduler()
+    s.done(s.next_job(0.0, 0), 0.02)
+    assert s.next_job(1.0, 0) is None
+    s.invalidate()
+    job = s.next_job(1.0, 0)
+    assert (job.scale, job.lens, job.preview) == (1.0, None, False)
+
+
+def test_a_frame_of_the_old_model_does_not_satisfy_the_new_one():
+    s = RenderScheduler()
+    job = s.next_job(0.0, 0)
+    s.invalidate()
+    s.done(job, 0.02)
+    assert s.next_job(0.1, 0) is not None
+
+
+def test_a_changed_model_does_not_retry_a_failed_render():
+    """Every training step changes the model; a broken render must stay stopped."""
+    s = RenderScheduler()
+    s.failed(s.next_job(0.0, 0))
+    s.invalidate()
+    assert s.next_job(1.0, 0) is None
+
+
+# ---------------------------------------------------------------- budget
+
+def test_the_budget_refuses_once_its_share_is_spent_and_recovers():
+    """10% of a 1 s window is 100 ms of preview; older frames age out."""
+    b = PreviewBudget(0.1, window_s=1.0)
+    assert b.allow(0.0)
+    b.spend(0.5, 0.05)
+    assert b.allow(0.5)
+    b.spend(0.6, 0.05)
+    assert not b.allow(0.6)
+    assert not b.allow(1.5), "the frame at 0.5 s is still inside the window"
+    assert b.allow(1.55)
+
+
+def test_a_zero_budget_never_renders():
+    assert not PreviewBudget(0.0).allow(0.0)
+
+
+def test_the_budget_follows_its_slider():
+    b = PreviewBudget(0.1, window_s=1.0)
+    b.spend(0.0, 0.1)
+    assert not b.allow(0.1)
+    b.fraction = 0.5
+    assert b.allow(0.1)
+
+
 def test_missing_viser_names_the_extra(monkeypatch):
     monkeypatch.setitem(sys.modules, "viser", None)
     with pytest.raises(SystemExit, match=r"metal-gauss\[viewer\]"):
@@ -208,7 +261,7 @@ def test_missing_viser_names_the_extra(monkeypatch):
 def test_the_viewer_renders_exactly_what_metal_gauss_render_does():
     from metal_gauss.io import Splats
     from metal_gauss.render_path import camera_path
-    from metal_gauss.viewer import render_view
+    from metal_gauss.viewer import SplatBatch, render_view
 
     g = torch.Generator().manual_seed(0)
     n = 4000
@@ -221,6 +274,7 @@ def test_the_viewer_renders_exactly_what_metal_gauss_render_does():
     vm = camera_path(torch.zeros(3), torch.tensor([0.0, 0.0, 3.0]), 8, 10.0, "orbit")[2]
     K = intrinsics(W, H, 50.0)
 
-    ours = render_view(sp, vm, K, W, H, background=(1.0, 1.0, 1.0), far=100.0)
+    ours = render_view(SplatBatch.from_splats(sp), vm, K, W, H,
+                       background=(1.0, 1.0, 1.0), far=100.0)
     theirs = next(iter(render_frames(sp, [vm], K, W, H, background=(1.0, 1.0, 1.0))))
     assert torch.equal(ours, theirs)
