@@ -140,7 +140,7 @@ def test_selective_adam_matches_dense_for_an_auxiliary_group():
     appearance_ref = appearance.detach().clone().requires_grad_(True)
     opt = SelectiveAdam([{"params": [gaussians], "lr": 1e-2}])
     opt.add_param_group({"params": [appearance], "lr": 3e-3,
-                         "name": "appearance"})
+                         "name": "appearance", "rowwise": False})
     dense = torch.optim.Adam([appearance_ref], lr=3e-3, eps=1e-15)
     visible = torch.zeros(12, dtype=torch.bool)
     visible[:3] = True
@@ -155,6 +155,34 @@ def test_selective_adam_matches_dense_for_an_auxiliary_group():
     assert torch.allclose(appearance, appearance_ref, atol=1e-6)
     assert "step" in opt.state[appearance]
     assert "steps" not in opt.state[appearance]
+
+
+def test_trainer_optimizer_updates_appearance_densely_under_selective_adam():
+    """The trainer's appearance group has one row per image, not per Gaussian.
+
+    Four images against twelve Gaussians: a rowwise update would either raise
+    on the row count or index the images with a Gaussian visibility mask.
+    """
+    from metal_gauss.appearance import AppearanceModel
+    from metal_gauss.train import make_optimizer
+
+    torch.manual_seed(4)
+    n = 12
+    p = {"means": torch.randn(n, 3), "log_scales": torch.randn(n, 3),
+         "quats": torch.randn(n, 4), "logit_opac": torch.randn(n),
+         "sh_dc": torch.randn(n, 1, 3), "sh_rest": torch.randn(n, 15, 3)}
+    appearance = AppearanceModel(4, "gain_bias", device="cpu")
+    opt = make_optimizer(p, 1e-3, selective=True, appearance=appearance,
+                         lr_appearance=1e-2)
+    for t in list(p.values()) + list(appearance.parameters()):
+        t.grad = torch.ones_like(t)
+    visible = torch.zeros(n, dtype=torch.bool)
+    visible[:3] = True
+
+    opt.step(visible)
+
+    assert torch.all(appearance.gain != 1.0), "every image's gain must move"
+    assert torch.all(appearance.bias != 0.0), "every image's bias must move"
 
 
 def test_selective_adam_exposes_standard_state_and_resettable_steps():
@@ -284,3 +312,4 @@ def test_noise_anneals_with_lr():
     add_noise(hot, lr_means=2e-4)
     add_noise(cold, lr_means=2e-6)                     # 100x decayed
     assert hot["means"].norm() > 50 * cold["means"].norm()
+
