@@ -39,11 +39,13 @@ Source = "https://github.com/nandometzger/metal-gauss"
 [project.scripts]
 metal-gauss-train = "metal_gauss.train:main"
 metal-gauss-render = "metal_gauss.render_path:main"
+metal-gauss-view = "metal_gauss.viewer:main"
 
 [project.optional-dependencies]
 bench = ["pycolmap>=3.10"]
 train = ["pycolmap>=3.10"]      # pillow/scipy moved to core; kept for compatibility
 test = ["pytest>=8.0"]
+viewer = ["viser>=1.1,<2"]
 
 [build-system]
 requires = ["hatchling"]
