@@ -98,6 +98,19 @@ def matrix_to_quat(R) -> tuple[float, float, float, float]:
     return (w, x, y, z)
 
 
+def view_frame_size(W0: int, H0: int, max_side: int, scale: float) -> tuple[int, int]:
+    """Frame size for a snapped view: long side on the 16 grid, aspect kept.
+
+    `frame_size` rounds both sides to 16, which stretches a view by up to a few
+    percent once its intrinsics are scaled to that frame. Only the long side
+    is rounded here; the short side follows the photograph.
+    """
+    long0, short0 = max(W0, H0), min(W0, H0)
+    long = max(16, int(max_side * scale) // 16 * 16)
+    short = max(1, round(long * short0 / long0))
+    return (long, short) if W0 >= H0 else (short, long)
+
+
 def vfov_from_K(K, H: int) -> float:
     """Vertical FOV in radians of a camera with intrinsics K and H rows."""
     return 2.0 * math.atan(0.5 * H / float(K[1][1]))
@@ -320,9 +333,13 @@ class PreviewBudget:
     Preview seconds inside a sliding window must stay under `fraction` of the
     window. A window rather than a running total, so a burst of dragging early
     in a run is not paid for by an hour of no preview at all later.
+
+    One second, not five: a 5 s window let a drag spend half a second of
+    frames up front and then froze the preview for seconds while the window
+    emptied, which read as a hang. A short window spreads the same share out.
     """
 
-    def __init__(self, fraction: float, window_s: float = 5.0) -> None:
+    def __init__(self, fraction: float, window_s: float = 1.0) -> None:
         self.fraction = fraction
         self.window_s = window_s
         self._frames: deque[tuple[float, float]] = deque()
@@ -859,7 +876,7 @@ class TrainingView(LiveView):
             return super()._frame(client, job, pose, samples, batch)
         view = snap.view
         H0, W0 = (int(s) for s in view.image.shape[:2])
-        W, H = frame_size(W0 / H0, int(self.max_resolution.value), job.scale)
+        W, H = view_frame_size(W0, H0, int(self.max_resolution.value), job.scale)
         if self.show_photo.value:
             photo = view.image.permute(2, 0, 1)[None].float()
             image = torch.nn.functional.interpolate(photo, size=(H, W), mode="area")[0] \
