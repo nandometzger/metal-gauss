@@ -31,17 +31,11 @@ class SelectiveAdam(torch.optim.Optimizer):
 
     def __init__(self, groups: list[dict], eps: float = 1e-15,
                  betas: tuple[float, float] = (0.9, 0.999)):
-        defaults = {"lr": 1e-3, "eps": eps, "betas": betas}
+        defaults = {"lr": 1e-3, "eps": eps, "betas": betas, "rowwise": True}
         super().__init__(groups, defaults)
         # Keep the old attribute as a compatibility alias for callers that
         # used the initial implementation before it matched torch's API.
         self.groups = self.param_groups
-
-    def add_param_group(self, param_group: dict) -> None:
-        """Add a torch-style group, classifying appearance parameters dense."""
-        group = dict(param_group)
-        group.setdefault("rowwise", group.get("name") != "appearance")
-        super().add_param_group(group)
 
     def _state_for(self, p: torch.Tensor, rowwise: bool) -> dict:
         st = self.state[p]

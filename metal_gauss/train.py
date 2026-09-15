@@ -163,7 +163,8 @@ def split_sh(p: dict) -> dict:
 
 def make_optimizer(p: dict, lr_means0: float, *, lr_opac: float = 1e-2,
                    sh_lr_div: float = 20.0, selective: bool = False,
-                   fused: bool = True):
+                   fused: bool = True, appearance: AppearanceModel | None = None,
+                   lr_appearance: float = 1e-3):
     groups = [
         {"params": [p["means"]], "lr": lr_means0, "name": "means"},
         {"params": [p["log_scales"]], "lr": 5e-3, "name": "scales"},
@@ -172,6 +173,12 @@ def make_optimizer(p: dict, lr_means0: float, *, lr_opac: float = 1e-2,
         {"params": [p["sh_dc"]], "lr": 2.5e-3, "name": "sh_dc"},
         {"params": [p["sh_rest"]], "lr": 2.5e-3 / sh_lr_div, "name": "sh_rest"},
     ]
+    if appearance is not None:
+        # One row per training image, not per Gaussian: SelectiveAdam must not
+        # index it with a visibility mask.
+        groups.append({"params": list(appearance.parameters()),
+                       "lr": lr_appearance, "name": "appearance",
+                       "rowwise": False})
     if selective:
         from metal_gauss.selective_adam import SelectiveAdam
         return SelectiveAdam(groups, eps=1e-15)
@@ -254,15 +261,14 @@ def train(args) -> dict:
     print(f"scene extent {extent:.2f}, initial means lr {lr_means0:.2e}")
 
     p = split_sh(p)
-    opt = make_optimizer(p, lr_means0, lr_opac=args.lr_opac,
-                         sh_lr_div=args.sh_lr_div,
-                         selective=args.selective_adam, fused=args.fused_adam)
-
     appearance = None
     if args.appearance != "off":
         appearance = AppearanceModel(len(scene.train), args.appearance, device)
-        opt.add_param_group({"params": list(appearance.parameters()),
-                             "lr": args.lr_appearance, "name": "appearance"})
+    opt = make_optimizer(p, lr_means0, lr_opac=args.lr_opac,
+                         sh_lr_div=args.sh_lr_div,
+                         selective=args.selective_adam, fused=args.fused_adam,
+                         appearance=appearance, lr_appearance=args.lr_appearance)
+    if appearance is not None:
         print(f"appearance correction: {args.appearance} "
               f"({sum(x.numel() for x in appearance.parameters())} params "
               f"over {len(scene.train)} training images)")
