@@ -494,6 +494,7 @@ def train(args) -> dict:
                             filter_3d=filter_3d)
             if live is not None:
                 live.set_psnr(psnr)
+                live.heldout_ready()            # evaluate() just decoded that split
             dt = clock.elapsed()
             print(f"step {step:>6}  loss {loss.item():.4f}  heldout PSNR {psnr:.2f} dB  "
                   f"{active/1000:.0f}k splats  {dt:.0f}s  ({1000 * dt / step:.0f} ms/step)",
