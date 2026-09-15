@@ -28,6 +28,7 @@ from metal_gauss.viewer import (
     SnapState,
     TrainClock,
     frame_size,
+    view_frame_size,
     import_viser,
     infer_up,
     intrinsics_vfov,
@@ -112,6 +113,22 @@ def test_vertical_fov_matches_the_renders_horizontal_one():
 def test_frame_size_follows_the_aspect_in_multiples_of_16(aspect, max_side, scale, want):
     """Few distinct sizes, so the MPS allocator reuses buffers instead of churning."""
     assert frame_size(aspect, max_side, scale) == want
+
+
+@pytest.mark.parametrize("W0, H0, max_side, scale", [
+    (800, 800, 1024, 1.0), (1000, 667, 1024, 1.0), (1000, 667, 1024, 0.25),
+    (667, 1000, 512, 0.5), (1600, 900, 1024, 0.75),
+])
+def test_a_snapped_view_keeps_its_own_aspect_to_half_a_pixel(W0, H0, max_side, scale):
+    """Rounding the short side to 16 too stretched a 1000x667 view by up to 3%.
+
+    The long side still snaps to 16; the short side follows the photograph, so
+    the scaled intrinsics stay square-pixelled to within rounding.
+    """
+    W, H = view_frame_size(W0, H0, max_side, scale)
+    assert max(W, H) % 16 == 0 and max(W, H) <= max_side
+    short, short0 = min(W, H), min(W0, H0)
+    assert abs(short - max(W, H) * short0 / max(W0, H0)) <= 0.5
 
 
 # ---------------------------------------------------------------- scheduling
