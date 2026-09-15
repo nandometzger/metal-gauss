@@ -14,7 +14,7 @@ in [BENCHMARKS.md](BENCHMARKS.md); rejected approaches, with numbers, live in
 | fused SSIM vs the `F.conv2d` expression | value bit-identical, gradient cosine 1.00000012 |
 | fused Adam vs `torch.optim.Adam` | rel 4.7×10⁻⁷ after 30 steps |
 
-75 tests: `pytest tests`. Thirteen of them are in `tests/test_runner.py` and guard the
+Run the suite with `pytest tests`. `tests/test_runner.py` guards the
 benchmark harness rather than the kernels — every wrong number this project has published came
 from a harness, and the two that did the most damage are now regression tests.
 
