@@ -15,11 +15,14 @@ render_fn signatures apart by catching TypeError, so a TypeError raised inside
 a render silently switches API. It also has no way to refine a defocused frame
 sample by sample, which is the one thing it would have had to do here.
 
-One thread owns every MPS call. viser's callbacks only record the newest pose
-and wake it; what to render next is decided by RenderScheduler, which is pure
-so it can be tested without a browser or a GPU. Copying frames off the GPU is
-not the cost worth avoiding: memory is unified, a 768x768 uint8 frame is
-1.7 MB, and the render and the JPEG encode dominate.
+LiveView owns no thread. viser's callbacks only record the newest pose and wake
+whoever drives `pump()`: metal-gauss-view loops on it, and the trainer calls it
+between optimisation steps on the training thread, so the GPU never sees two
+threads. What to render next is decided by RenderScheduler, and how much of the
+trainer's time the preview may take by PreviewBudget; both are pure so they can
+be tested without a browser or a GPU. Copying frames off the GPU is not the
+cost worth avoiding: memory is unified, a 768x768 uint8 frame is 1.7 MB, and
+the render and the JPEG encode dominate.
 
 The server binds to 127.0.0.1 unless told otherwise. viser's own default is
 0.0.0.0, which would serve the scene to the whole network.
@@ -34,6 +37,8 @@ import sys
 import threading
 import time
 import traceback
+from collections import deque
+from collections.abc import Callable
 
 import torch
 
@@ -150,6 +155,17 @@ class RenderScheduler:
         self._lens_done = 0
         self._stalled = False
 
+    def invalidate(self) -> None:
+        """The splats changed under an unchanged camera: training took a step.
+
+        A new settled frame is due, but this is not motion, so no preview. A
+        render that failed stays stopped: the model changes every step, and a
+        persistent error would otherwise be retried every step.
+        """
+        self._gen += 1
+        self._full_done = False
+        self._lens_done = 0
+
     def _moving(self, now: float) -> bool:
         return now - self._changed_at < self.SETTLE_S
 
@@ -196,14 +212,59 @@ class RenderScheduler:
             self._stalled = True
 
 
+class PreviewBudget:
+    """How much wall-clock the preview may take from whoever calls pump().
+
+    Preview seconds inside a sliding window must stay under `fraction` of the
+    window. A window rather than a running total, so a burst of dragging early
+    in a run is not paid for by an hour of no preview at all later.
+    """
+
+    def __init__(self, fraction: float, window_s: float = 5.0) -> None:
+        self.fraction = fraction
+        self.window_s = window_s
+        self._frames: deque[tuple[float, float]] = deque()
+
+    def allow(self, now: float) -> bool:
+        if self.fraction <= 0.0:
+            return False
+        while self._frames and self._frames[0][0] < now - self.window_s:
+            self._frames.popleft()
+        return sum(s for _, s in self._frames) < self.fraction * self.window_s
+
+    def spend(self, now: float, seconds: float) -> None:
+        self._frames.append((now, seconds))
+
+
 # --------------------------------------------------------------- rendering
 
-def render_view(sp: Splats, viewmat: torch.Tensor, K: torch.Tensor, W: int, H: int,
+@dataclasses.dataclass(frozen=True)
+class SplatBatch:
+    """Activated splats, ready for the rasteriser: what one pump renders."""
+    means: torch.Tensor
+    quats: torch.Tensor
+    scales: torch.Tensor
+    opacities: torch.Tensor
+    sh: torch.Tensor
+    sh_rest: torch.Tensor | None
+    sh_degree: int
+    antialias: bool = False
+
+    @classmethod
+    def from_splats(cls, sp: Splats) -> "SplatBatch":
+        return cls(sp.means, sp.quats, sp.scales, sp.opacities, sp.sh, None, sp.sh_degree)
+
+    def __len__(self) -> int:
+        return int(self.means.shape[0])
+
+
+def render_view(batch: SplatBatch, viewmat: torch.Tensor, K: torch.Tensor, W: int, H: int,
                 background, far: float) -> torch.Tensor:
     """One (H,W,3) frame in [0,1] on the GPU, as `render_frames` draws it."""
-    rgb, _, _ = render(sp.means, sp.quats, sp.scales, sp.opacities, sp.sh,
-                       K, viewmat, W, H, sh_degree=sp.sh_degree, backend="metal",
-                       background=background, far=far)
+    rgb, _, _ = render(batch.means, batch.quats, batch.scales, batch.opacities, batch.sh,
+                       K, viewmat, W, H, sh_degree=batch.sh_degree, backend="metal",
+                       background=background, far=far, sh_rest=batch.sh_rest,
+                       antialias=batch.antialias)
     return rgb.detach().clamp(0.0, 1.0)
 
 
@@ -258,64 +319,75 @@ class _Client:
         self.acc: torch.Tensor | None = None
 
 
-class Viewer:
-    def __init__(self, viser, sp: Splats, args, eye: torch.Tensor, target: torch.Tensor,
-                 fov_h: float) -> None:
-        self.sp = sp
-        self.fov_h = fov_h
-        self.flip = _GL2CV if args.convention == "opengl" else None
-        self.background = (1.0, 1.0, 1.0) if args.background == "white" else (0.0, 0.0, 0.0)
-        self.far = scene_far(sp.means.detach().cpu(), eye, target)
+class LiveView:
+    """The viser server, its GUI and per-client scheduling, driven by `pump()`.
+
+    `source` returns the SplatBatch to draw and is called once per pump that
+    renders anything, so a trainer can hand in a closure over parameters that
+    change every step. The FOV is either horizontal (`fov_h`, degrees, turned
+    into each browser's vertical FOV through its aspect, as metal-gauss-render
+    means it) or already vertical (`fov_v`, radians, e.g. from a camera's K).
+    """
+
+    def __init__(self, viser, source: Callable[[], SplatBatch], *, eye: torch.Tensor,
+                 target: torch.Tensor, up, background, far: float, host: str, port: int,
+                 max_resolution: int = 1024, fov_h: float | None = None,
+                 fov_v: float | None = None, world_flip: torch.Tensor | None = None) -> None:
+        self.source = source
+        self.fov_h, self.fov_v = fov_h, fov_v
+        self.flip = world_flip
+        self.background = background
+        self.far = far
         self.clients: dict[int, _Client] = {}
         self.clients_lock = threading.Lock()
         self.wake = threading.Event()
-        self.stop = threading.Event()
+        self.preview_s = 0.0
+        self._rr = 0
 
-        # Build the Metal extension here, on one thread, before any client can
-        # ask for a frame: nothing in metal_backend._load guards a second caller.
+        # Build the Metal extension here, before any client can ask for a frame:
+        # nothing in metal_backend._load guards a second caller.
         with torch.no_grad():
-            render_view(sp, world_to_camera(torch.eye(3), eye), intrinsics_vfov(16, 16, 1.0),
-                        16, 16, self.background, self.far)
+            render_view(source(), world_to_camera(torch.eye(3), eye),
+                        intrinsics_vfov(16, 16, 1.0), 16, 16, background, far)
 
-        self.server = viser.ViserServer(host=args.host, port=args.port)
-        self.server.scene.set_up_direction(args.up)
+        up_vector = _UP_VECTORS[up] if isinstance(up, str) else tuple(float(v) for v in up)
+        self.server = viser.ViserServer(host=host, port=port)
+        self.server.scene.set_up_direction(up if isinstance(up, str) else up_vector)
         # Set before any client connects: afterwards it only moves Reset View.
         self.server.initial_camera.position = eye.numpy()
         self.server.initial_camera.look_at = target.numpy()
-        self.server.initial_camera.up = _UP_VECTORS[args.up]
+        self.server.initial_camera.up = up_vector
 
         dist = float(torch.linalg.norm(target - eye))
         gui = self.server.gui
         with gui.add_folder("Render"):
             self.max_resolution = gui.add_slider(
-                "Max resolution", min=256, max=2048, step=16,
-                initial_value=args.max_resolution)
+                "Max resolution", min=256, max=2048, step=16, initial_value=max_resolution)
             self.readout = gui.add_markdown("waiting for the first frame")
         with gui.add_folder("Lens"):
             self.aperture = gui.add_slider(
                 "Aperture", min=0.0, max=0.1 * dist, step=0.001 * dist, initial_value=0.0,
                 hint="lens radius in world units; 0 is a pinhole")
-            self.auto_focus = gui.add_checkbox(
-                "Focus on orbit centre", initial_value=True)
+            self.auto_focus = gui.add_checkbox("Focus on orbit centre", initial_value=True)
             self.focus = gui.add_slider(
                 "Focus distance", min=0.05 * dist, max=4.0 * dist, step=0.005 * dist,
                 initial_value=dist, disabled=True)
-            self.samples = gui.add_slider(
-                "Samples", min=8, max=128, step=8, initial_value=96)
+            self.samples = gui.add_slider("Samples", min=8, max=128, step=8, initial_value=96)
         self.status = gui.add_markdown("")
 
         for handle in (self.max_resolution, self.aperture, self.focus, self.samples):
-            handle.on_update(lambda _: self._touch_all())
+            handle.on_update(lambda _: self.touch_all())
 
         @self.auto_focus.on_update
         def _(_) -> None:
             self.focus.disabled = self.auto_focus.value
-            self._touch_all()
+            self.touch_all()
 
         @self.server.on_client_connect
         def _(handle) -> None:
             client = _Client(handle)
-            handle.camera.fov = vertical_fov(self.fov_h, handle.camera.aspect)
+            handle.camera.fov = (self.fov_v if self.fov_v is not None
+                                 else vertical_fov(self.fov_h, handle.camera.aspect))
 
             @handle.camera.on_update
             async def _(camera) -> None:
@@ -337,73 +409,107 @@ class Viewer:
             with self.clients_lock:
                 self.clients.pop(handle.client_id, None)
 
-    def _touch_all(self) -> None:
-        now = time.monotonic()
+    def _clients(self) -> list[_Client]:
         with self.clients_lock:
-            clients = list(self.clients.values())
-        for client in clients:
+            return list(self.clients.values())
+
+    def touch_all(self) -> None:
+        """A render setting changed: every client counts as moved."""
+        now = time.monotonic()
+        for client in self._clients():
             with client.lock:
                 client.scheduler.touch(now)
         self.wake.set()
 
-    def serve(self) -> None:
-        thread = threading.Thread(target=self._loop, name="metal-gauss-view", daemon=True)
-        thread.start()
+    def invalidate_all(self) -> None:
+        """The splats changed: every client needs a new settled frame."""
+        for client in self._clients():
+            with client.lock:
+                client.scheduler.invalidate()
+        self.wake.set()
+
+    def next_wait(self) -> float | None:
+        """Seconds until some client has work without a new event, or None."""
+        now = time.monotonic()
+        wait = None
+        for client in self._clients():
+            with client.lock:
+                until = client.scheduler.wait_s(now)
+            if until is not None:
+                wait = until if wait is None else min(wait, until)
+        return wait
+
+    def pump(self, max_jobs: int | None = None, budget: PreviewBudget | None = None,
+             lens: bool = True) -> int:
+        """Render the frames that are due, round-robin over clients; return how many.
+
+        Nothing due means no GPU work at all, not even a sync. Otherwise the
+        queue is synchronised BEFORE the frame clock starts, so work the caller
+        left queued is charged to the caller and not to the preview.
+        """
+        clients = self._clients()
+        if not clients:
+            return 0
+        self._rr = (self._rr + 1) % len(clients)
+        clients = clients[self._rr:] + clients[:self._rr]
+        samples = int(self.samples.value) if lens and self.aperture.value > 0 else 0
+        batch = None
+        rendered = 0
+        with torch.no_grad():                   # thread-local, so entered here
+            for client in clients:
+                if max_jobs is not None and rendered >= max_jobs:
+                    break
+                now = time.monotonic()
+                if budget is not None and not budget.allow(now):
+                    break
+                with client.lock:
+                    pose = client.pose
+                    job = None if pose is None else client.scheduler.next_job(now, samples)
+                if job is None:
+                    continue
+                if batch is None:
+                    torch.mps.synchronize()
+                    batch = self.source()
+                t0 = time.perf_counter()
+                try:
+                    W, H, image = self._frame(client, job, pose, samples, batch)
+                    client.handle.scene.set_background_image(
+                        image, format="jpeg", jpeg_quality=job.quality)
+                except Exception as e:
+                    traceback.print_exc()
+                    self.status.content = f"**render failed:** `{type(e).__name__}: {e}`"
+                    with client.lock:
+                        client.scheduler.failed(job)
+                    continue
+                seconds = time.perf_counter() - t0
+                with client.lock:
+                    client.scheduler.done(job, seconds)
+                if budget is not None:
+                    budget.spend(time.monotonic(), seconds)
+                self.preview_s += seconds
+                rendered += 1
+                self._report(job, W, H, seconds, len(batch))
+        return rendered
+
+    def serve_forever(self) -> None:
+        """Keep rendering on the calling thread until Ctrl-C, then stop the server."""
         try:
-            while thread.is_alive():
-                thread.join(0.5)
+            while True:
+                self.wake.clear()
+                if self.pump() == 0:
+                    self.wake.wait(timeout=self.next_wait() or 0.5)
         except KeyboardInterrupt:
             pass
         finally:
-            self.stop.set()
-            self.wake.set()
-            thread.join()
             self.server.stop()
 
-    def _loop(self) -> None:
-        with torch.no_grad():                   # thread-local, so entered here
-            while not self.stop.is_set():
-                self.wake.clear()
-                wait = None
-                worked = False
-                with self.clients_lock:
-                    clients = list(self.clients.values())
-                for client in clients:
-                    samples = int(self.samples.value) if self.aperture.value > 0 else 0
-                    now = time.monotonic()
-                    with client.lock:
-                        pose = client.pose
-                        job = client.scheduler.next_job(now, samples)
-                        until = client.scheduler.wait_s(now)
-                    if job is None:
-                        if until is not None:
-                            wait = until if wait is None else min(wait, until)
-                        continue
-                    worked = True
-                    t0 = time.perf_counter()
-                    try:
-                        W, H, image = self._frame(client, job, pose, samples)
-                        client.handle.scene.set_background_image(
-                            image, format="jpeg", jpeg_quality=job.quality)
-                    except Exception as e:
-                        traceback.print_exc()
-                        self.status.content = f"**render failed:** `{type(e).__name__}: {e}`"
-                        with client.lock:
-                            client.scheduler.failed(job)
-                        continue
-                    seconds = time.perf_counter() - t0
-                    with client.lock:
-                        client.scheduler.done(job, seconds)
-                    self._report(job, W, H, seconds)
-                if not worked:
-                    self.wake.wait(timeout=wait)
-
-    def _frame(self, client: _Client, job: Job, pose: _Pose, samples: int):
+    def _frame(self, client: _Client, job: Job, pose: _Pose, samples: int,
+               batch: SplatBatch):
         W, H = frame_size(pose.aspect, int(self.max_resolution.value), job.scale)
         K = intrinsics_vfov(W, H, pose.fov)
         if job.lens is None:
             vm = pose_to_viewmat(pose.wxyz, pose.position, self.flip)
-            rgb = render_view(self.sp, vm, K, W, H, self.background, self.far)
+            rgb = render_view(batch, vm, K, W, H, self.background, self.far)
         else:
             if client.lens_gen != job.gen:
                 R = quat_to_matrix(pose.wxyz)
@@ -417,14 +523,14 @@ class Viewer:
                 client.lens_gen = job.gen
             start, stop = job.lens
             for vm in client.views[start:stop]:
-                frame = render_view(self.sp, vm, K, W, H, self.background, self.far)
+                frame = render_view(batch, vm, K, W, H, self.background, self.far)
                 client.acc = frame if client.acc is None else client.acc + frame
             rgb = client.acc / stop
         image = (rgb * 255.0).round().to(torch.uint8).cpu().numpy()
         return W, H, image
 
-    def _report(self, job: Job, W: int, H: int, seconds: float) -> None:
-        text = f"{1000.0 * seconds:.1f} ms/frame · {len(self.sp):,} splats · {W}×{H}"
+    def _report(self, job: Job, W: int, H: int, seconds: float, splats: int) -> None:
+        text = f"{1000.0 * seconds:.1f} ms/frame · {splats:,} splats · {W}×{H}"
         if job.lens is not None:
             text += f" · {job.lens[1]} samples"
         else:
@@ -461,11 +567,15 @@ def main(argv: list[str] | None = None) -> int:
 
     sp = load_ply(a.ply, device="mps")
     print(f"{len(sp):,} splats, SH degree {sp.sh_degree}", file=sys.stderr)
-    _, fov_h, eye, target = frame_cloud(sp.means.detach().cpu(), "auto", a.up,
-                                        a.convention, a.fov)
-    Viewer(viser, sp, a, eye, target, fov_h).serve()
+    means = sp.means.detach().cpu()
+    _, fov_h, eye, target = frame_cloud(means, "auto", a.up, a.convention, a.fov)
+    batch = SplatBatch.from_splats(sp)
+    LiveView(viser, lambda: batch, eye=eye, target=target, up=a.up,
+             background=(1.0, 1.0, 1.0) if a.background == "white" else (0.0, 0.0, 0.0),
+             far=scene_far(means, eye, target), host=a.host, port=a.port,
+             max_resolution=a.max_resolution, fov_h=fov_h,
+             world_flip=_GL2CV if a.convention == "opengl" else None).serve_forever()
     return 0
-
 
 if __name__ == "__main__":
     raise SystemExit(main())
