@@ -291,6 +291,58 @@ def test_up_is_the_normalised_mean_of_the_camera_ups():
     assert torch.allclose(infer_up(views), torch.tensor([0.0, S, S]), atol=1e-6)
 
 
+def _fake_live(monkeypatch, cls_name="LiveView"):
+    """A LiveView with no server behind it: one client, instant fake frames."""
+    import threading
+    from types import SimpleNamespace as NS
+
+    from metal_gauss import viewer as V
+
+    live = getattr(V, cls_name).__new__(getattr(V, cls_name))
+    live.clients_lock = threading.Lock()
+    live._rr = 0
+    live.preview_s = 0.0
+    live.samples, live.aperture = NS(value=96), NS(value=0.0)
+    live.status, live.readout = NS(content=""), NS(content="")
+    live.source = lambda: [0] * 10
+    live.wake = threading.Event()
+    client = V._Client(NS(scene=NS(set_background_image=lambda image, **kw: None)))
+    client.pose = V._Pose((1.0, 0.0, 0.0, 0.0), (0.0, 0.0, 0.0), (0.0, 0.0, 1.0), 1.0, 1.0)
+    live.clients = {1: client}
+    monkeypatch.setattr(V.torch.mps, "synchronize", lambda: None)
+    monkeypatch.setattr(live, "_frame", lambda *a: (16, 16, None))
+    return live, client
+
+
+def test_only_frames_taken_from_running_training_count_as_preview_time(monkeypatch):
+    """Paused and after-training renders cost the trainer nothing.
+
+    Counting them put 'preview 23% of wall-clock' on screen against a 10% budget:
+    the numerator had paused renders in it, the wall-clock did not.
+    """
+    live, client = _fake_live(monkeypatch)
+    assert live.pump() == 1                  # paused / finished: no budget
+    assert live.preview_s == 0.0
+    client.scheduler.invalidate()
+    assert live.pump(max_jobs=1, budget=PreviewBudget(1.0)) == 1
+    assert live.preview_s > 0.0
+
+
+def test_finishing_releases_a_pause_that_arrived_too_late(monkeypatch):
+    """Pause clicked after the last step must not leave a live 'Resume' button."""
+    from types import SimpleNamespace as NS
+
+    live, _ = _fake_live(monkeypatch, "TrainingView")
+    live.paused = True
+    live.pause_button = NS(label="Resume", disabled=False)
+    live._stats, live.stats = {}, NS(content="")
+    monkeypatch.setattr(live, "invalidate_all", lambda: None)
+    monkeypatch.setattr(live, "serve_forever", lambda: None)
+    live.finish()
+    assert live.paused is False
+    assert (live.pause_button.label, live.pause_button.disabled) == ("Pause", True)
+
+
 def test_missing_viser_names_the_extra(monkeypatch):
     monkeypatch.setitem(sys.modules, "viser", None)
     with pytest.raises(SystemExit, match=r"metal-gauss\[viewer\]"):

@@ -528,8 +528,10 @@ class LiveView:
                 with client.lock:
                     client.scheduler.done(job, seconds)
                 if budget is not None:
+                    # Only budgeted frames took time from running training;
+                    # paused and finished renders cost the trainer nothing.
                     budget.spend(time.monotonic(), seconds)
-                self.preview_s += seconds
+                    self.preview_s += seconds
                 rendered += 1
                 self._report(job, W, H, seconds, len(batch))
         return rendered
@@ -675,6 +677,10 @@ class TrainingView(LiveView):
 
     def finish(self) -> None:
         """Training is over: keep showing the final model until Ctrl-C."""
+        # A pause clicked after the last step was never held; release it.
+        self.paused = False
+        self.pause_button.label = "Pause"
+        self.pause_button.disabled = True
         self.set_status("training finished · Ctrl-C to exit")
         self.invalidate_all()
         self.serve_forever()
