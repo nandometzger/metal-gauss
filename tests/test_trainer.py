@@ -313,3 +313,23 @@ def test_noise_anneals_with_lr():
     add_noise(cold, lr_means=2e-6)                     # 100x decayed
     assert hot["means"].norm() > 50 * cold["means"].norm()
 
+
+# ---------------------------------------------------------------- CLI + report
+
+@pytest.mark.parametrize("flags, expected", [
+    ([], True),
+    (["--lr-scene-scaled"], True),
+    (["--no-lr-scene-scaled"], False),
+])
+def test_lr_scene_scaled_can_be_switched_off(monkeypatch, flags, expected):
+    import sys
+
+    import metal_gauss.train as train_mod
+
+    seen = {}
+    monkeypatch.setattr(train_mod, "train", lambda args: seen.update(vars(args)))
+    monkeypatch.setattr(sys, "argv",
+                        ["metal-gauss-train", "--blender", "unused", *flags])
+    train_mod.main()
+    assert seen["lr_scene_scaled"] is expected
+

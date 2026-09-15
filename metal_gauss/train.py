@@ -629,7 +629,8 @@ def main():
     ap.add_argument("--lr-appearance", type=float, default=1e-3)
     ap.add_argument("--appearance-reg", type=float, default=1e-2)
     ap.add_argument("--lr-means-end", type=float, default=2e-6)
-    ap.add_argument("--lr-scene-scaled", action="store_true", default=True)
+    ap.add_argument("--lr-scene-scaled", action=argparse.BooleanOptionalAction,
+                    default=True)
     ap.add_argument("--lr-opac", type=float, default=1e-2)
     ap.add_argument("--sh-lr-div", type=float, default=20.0)
     ap.add_argument("--sh-warmup", type=int, default=1000,
