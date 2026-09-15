@@ -27,13 +27,16 @@ import pytest
 import torch
 
 from metal_gauss.render_path import (
+    _GL2CV,
     aperture_views,
     bbox_framing,
     fov_from_focal_35mm,
     camera_path,
+    frame_cloud,
     framing_fov,
     in_front_fraction,
     intrinsics,
+    lens_views,
     look_at,
     pivot_depth,
     world_to_camera,
@@ -526,3 +529,199 @@ def test_samples_are_spread_by_area_not_by_radius():
 def test_aperture_rejects_a_zero_sample_count():
     with pytest.raises(ValueError, match="at least one"):
         aperture_views(torch.zeros(3), torch.tensor([0.0, 0.0, 1.0]), 0.05, 0)
+
+
+def test_a_given_camera_rotation_is_kept_including_its_roll():
+    """The viewer's camera orbits freely and is not built by `look_at`.
+
+    Rebuilding each lens sample upright from the up axis would roll a camera
+    that was not upright, so the defocused frame would not line up with the
+    pinhole frame it replaces. Given R0, radius 0 is that camera exactly and
+    every sample keeps its roll while still aiming at the focal point.
+    """
+    eye = torch.tensor([0.2, -0.1, -2.0])
+    roll = math.radians(30.0)
+    c, s = math.cos(roll), math.sin(roll)
+    R0 = look_at(eye, torch.zeros(3)) @ torch.tensor([[c, -s, 0.0], [s, c, 0.0], [0.0, 0.0, 1.0]])
+    focal = eye + R0[:, 2] * 2.0
+
+    pinhole = aperture_views(eye, focal, 0.0, 16, R0=R0)
+    assert len(pinhole) == 1
+    assert torch.allclose(pinhole[0], world_to_camera(R0, eye), atol=1e-6)
+
+    for vm in aperture_views(eye, focal, 0.05, 16, R0=R0):
+        down = vm[:3, :3][1]                        # camera +Y in world terms
+        assert float(down @ R0[:, 1]) > 0.999, "sample lost the camera's roll"
+        forward = vm[:3, :3][2]
+        want = focal - centre(vm)
+        assert torch.allclose(forward, want / want.norm(), atol=1e-5)
+
+
+# ------------------------------------------------------------------- up axis
+
+UP_VECTORS = {"-y": (0.0, -1.0, 0.0), "+y": (0.0, 1.0, 0.0),
+              "+z": (0.0, 0.0, 1.0), "-z": (0.0, 0.0, -1.0)}
+
+
+def level_eye(up, dist=2.0):
+    """An eye level with the origin, back along the axis the framing uses."""
+    return torch.tensor([0.0, 0.0, -dist]) if up in ("-y", "+y") else torch.tensor([0.0, -dist, 0.0])
+
+
+def test_default_up_is_exactly_the_existing_behaviour():
+    """Every render made before --up existed must come out bit-identical."""
+    eye, target = torch.tensor([0.3, -0.2, -2.0]), torch.tensor([0.1, 0.2, 0.4])
+    assert torch.equal(look_at(eye, target, up="-y"), look_at(eye, target))
+    for path in PATHS:
+        assert all(torch.equal(a, b) for a, b in zip(
+            camera_path(eye, target, 8, 5.0, path, up="-y"),
+            camera_path(eye, target, 8, 5.0, path)))
+    assert all(torch.equal(a, b) for a, b in zip(
+        aperture_views(eye, target, 0.05, 8, up="-y"), aperture_views(eye, target, 0.05, 8)))
+    cube = cube_cloud()
+    assert all(torch.equal(a, b) for a, b in zip(
+        bbox_framing(cube, 45.0, up="-y"), bbox_framing(cube, 45.0)))
+
+
+def test_z_up_look_at_is_blenders_front_view():
+    """Z up, looking along +Y: image right is +X and image down is -Z."""
+    R = look_at(torch.tensor([0.0, -2.0, 0.0]), torch.zeros(3), up="+z")
+    assert torch.allclose(R, torch.tensor([[1.0, 0.0, 0.0],
+                                           [0.0, 0.0, 1.0],
+                                           [0.0, -1.0, 0.0]]), atol=1e-6)
+
+
+@pytest.mark.parametrize("up", list(UP_VECTORS))
+def test_what_is_above_the_target_renders_in_the_upper_half(up):
+    """The property #18 is about: the scene's up is the image's up."""
+    eye = level_eye(up)
+    vm = world_to_camera(look_at(eye, torch.zeros(3), up=up), eye)
+    above = torch.tensor([*[0.5 * v for v in UP_VECTORS[up]], 1.0])
+    assert float((vm @ above)[1]) < 0
+    right = vm[:3, :3][0]
+    assert abs(float(right @ torch.tensor(UP_VECTORS[up]))) < 1e-6, "camera is rolled"
+
+
+@pytest.mark.parametrize("up", ["+z", "-z"])
+def test_z_up_look_at_survives_looking_along_the_up_axis(up):
+    R = look_at(torch.zeros(3), torch.tensor([0.0, 0.0, 2.0]), up=up)
+    assert torch.allclose(R @ R.T, torch.eye(3), atol=1e-6)
+    assert float(torch.linalg.det(R)) == pytest.approx(1.0, abs=1e-6)
+    assert torch.allclose(R[:, 2], torch.tensor([0.0, 0.0, 1.0]), atol=1e-6)
+
+
+def test_unknown_up_axis_is_rejected():
+    with pytest.raises(ValueError, match="unknown up axis"):
+        look_at(torch.zeros(3), torch.tensor([0.0, 0.0, 1.0]), up="z")
+
+
+def test_z_up_bbox_framing_sits_level_in_front_of_the_cloud():
+    """Back along -Y at the target's height, the same distance, whole cloud in frame."""
+    cube = cube_cloud()
+    W = H = 256
+    eye, target = bbox_framing(cube, 45.0, up="+z")
+    default_eye, _ = bbox_framing(cube, 45.0)
+
+    assert torch.allclose(target, torch.zeros(3), atol=1e-6)
+    assert float(eye[1]) < float(target[1])
+    assert float(eye[0]) == pytest.approx(float(target[0]), abs=1e-6)
+    assert float(eye[2]) == pytest.approx(float(target[2]), abs=1e-6)
+    assert float(torch.linalg.norm(target - eye)) == pytest.approx(
+        float(torch.linalg.norm(target - default_eye)), rel=1e-6)
+
+    vm = world_to_camera(look_at(eye, target, up="+z"), eye)
+    cam = (torch.cat([cube, torch.ones(len(cube), 1)], dim=1) @ vm.T)[:, :3]
+    assert (cam[:, 2] > 0).all()
+    uv = cam @ intrinsics(W, H, 45.0).T
+    uv = uv[:, :2] / uv[:, 2:3]
+    assert (uv >= 0).all() and (uv[:, 0] <= W).all() and (uv[:, 1] <= H).all()
+
+
+@pytest.mark.parametrize("up", ["+y", "+z", "-z"])
+def test_an_orbit_circles_the_vertical_axis(up):
+    """Level all the way round: constant height, constant distance, never rolled."""
+    eye, target = level_eye(up), torch.zeros(3)
+    upv = torch.tensor(UP_VECTORS[up])
+    views = camera_path(eye, target, FRAMES, 20.0, "orbit", up=up)
+
+    assert torch.allclose(views[0], world_to_camera(look_at(eye, target, up=up), eye),
+                          atol=1e-6)
+    for vm in views:
+        R = c2w(vm)
+        assert torch.allclose(R @ R.T, torch.eye(3), atol=1e-5)
+        assert float(centre(vm) @ upv) == pytest.approx(0.0, abs=1e-5)
+        assert float(torch.linalg.norm(centre(vm) - target)) == pytest.approx(2.0, rel=1e-5)
+        assert abs(float(R[:, 0] @ upv)) < 1e-5
+    swing = max(float(torch.linalg.norm(centre(vm) - eye)) for vm in views)
+    assert swing > 0.5, "the orbit did not move"
+
+
+@pytest.mark.parametrize("up", ["+y", "+z", "-z"])
+def test_a_wiggle_under_another_up_is_rigid_and_loops(up):
+    eye, target = level_eye(up), torch.zeros(3)
+    views = camera_path(eye, target, FRAMES, 5.0, "wiggle", up=up)
+    for vm in views:
+        R = c2w(vm)
+        assert torch.allclose(R @ R.T, torch.eye(3), atol=1e-5)
+        assert float(torch.linalg.det(R)) == pytest.approx(1.0, abs=1e-5)
+    steps = [float((views[i + 1] - views[i]).norm()) for i in range(FRAMES - 1)]
+    wrap = float((views[0] - views[-1]).norm())
+    assert 0 < wrap <= 1.05 * max(steps)
+
+
+# --------------------------------------------------------- opengl convention
+
+def test_opengl_bbox_framing_keeps_the_cloud_in_front():
+    """The flip is applied to the world, so framing has to see the flipped cloud.
+
+    Framing the file's own coordinates aimed the camera at a mirror image: this
+    cloud, centred at y=1 z=5 in OpenGL axes, rendered with none of it in front
+    of the camera.
+    """
+    cloud = cube_cloud() * 0.3 + torch.tensor([0.0, 1.0, 5.0])
+    W = H = 256
+    mode, fov, eye, target = frame_cloud(cloud, frame="bbox", convention="opengl")
+    assert mode == "bbox"
+    vm = camera_path(eye, target, 1, 0.0)[0] @ _GL2CV
+    cam = (torch.cat([cloud, torch.ones(len(cloud), 1)], dim=1) @ vm.T)[:, :3]
+    assert (cam[:, 2] > 0).all(), f"{float((cam[:, 2] > 0).float().mean()):.0%} in front"
+    uv = cam @ intrinsics(W, H, fov).T
+    uv = uv[:, :2] / uv[:, 2:3]
+    assert (uv >= 0).all() and (uv[:, 0] <= W).all() and (uv[:, 1] <= H).all()
+
+
+def test_opengl_auto_framing_recognises_a_monocular_prediction():
+    """An OpenGL prediction sits at -Z; only the flipped cloud is 'in front'."""
+    prediction_gl = scene() * torch.tensor([1.0, -1.0, -1.0])
+    mode, _, eye, target = frame_cloud(prediction_gl, frame="auto", fov=40.0,
+                                       convention="opengl")
+    assert mode == "input"
+    assert torch.equal(eye, torch.zeros(3)) and float(target[2]) > 0
+
+
+def test_opengl_lens_at_zero_radius_is_the_opengl_pinhole():
+    """The lens is built in the OpenCV world and flipped afterwards.
+
+    Rebuilding it from the already-flipped matrix aimed every sample with the
+    wrong world's up and rendered the defocused image upside down.
+    """
+    eye, target = torch.tensor([0.1, 0.0, -2.0]), torch.tensor([0.0, 0.2, 0.5])
+    pinhole = camera_path(eye, target, 1, 0.0)[0] @ _GL2CV
+    views = lens_views(pinhole, 2.0, 0.0, 16, world_flip=_GL2CV)
+    assert len(views) == 1
+    assert torch.allclose(views[0], pinhole, atol=1e-6)
+
+
+def test_opencv_lens_views_match_the_aperture_around_the_view():
+    """Without a flip, the lens is exactly `aperture_views` around the view's own axis."""
+    eye, target = torch.tensor([0.1, 0.0, -2.0]), torch.tensor([0.0, 0.2, 0.5])
+    vm = camera_path(eye, target, 1, 0.0)[0]
+    focal = eye + c2w(vm)[:, 2] * 2.0
+    assert all(torch.allclose(a, b, atol=1e-6) for a, b in zip(
+        lens_views(vm, 2.0, 0.05, 8), aperture_views(eye, focal, 0.05, 8)))
+
+
+def test_input_framing_refuses_another_up_axis():
+    """An input camera is OpenCV by construction, so its up is -y and nothing else."""
+    with pytest.raises(SystemExit, match="--up"):
+        frame_cloud(scene(), frame="input", up="+z", fov=40.0)
