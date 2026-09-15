@@ -333,3 +333,13 @@ def test_lr_scene_scaled_can_be_switched_off(monkeypatch, flags, expected):
     train_mod.main()
     assert seen["lr_scene_scaled"] is expected
 
+
+def test_run_report_records_the_installed_package_version():
+    """A pip install has no .git, so the version is the only build identity."""
+    import argparse
+    import importlib.metadata
+
+    from metal_gauss.train import _run_report
+
+    out = _run_report(argparse.Namespace(steps=10, budget=100), [], 1.0, 100)
+    assert out["env"]["version"] == importlib.metadata.version("metal-gauss")

@@ -12,6 +12,7 @@ stays flat.
 from __future__ import annotations
 
 import argparse
+import importlib.metadata
 import json
 import math
 import platform
@@ -576,12 +577,19 @@ def _run_report(args, log, wall_s, active):
         except Exception:
             return None
 
+    def _version():
+        try:
+            return importlib.metadata.version("metal-gauss")
+        except importlib.metadata.PackageNotFoundError:   # uninstalled checkout
+            return None
+
     resolved = {k: v for k, v in sorted(vars(args).items())}
     ms = (1000.0 * wall_s / args.steps) if args.steps else None
     return {
         "schema": 1,
         "resolved": resolved,
         "env": {
+            "version": _version(),
             "git": _git("rev-parse", "--short", "HEAD"),
             "dirty": bool(_git("status", "--porcelain")),
             "torch": torch.__version__,
