@@ -86,6 +86,11 @@ class LazyViews(Sequence):
                     f"expected {self._count} views, decoded {len(self._views)}")
         return self._views
 
+    @property
+    def materialised(self) -> bool:
+        """Whether the pixels are decoded, so reading a view costs nothing."""
+        return self._views is not None
+
     def __len__(self) -> int:
         return self._count
 

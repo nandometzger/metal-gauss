@@ -16,18 +16,29 @@ import sys
 import pytest
 import torch
 
+from types import SimpleNamespace
+
+import numpy as np
+
+from metal_gauss.dataset import LazyViews
 from metal_gauss.render_path import _GL2CV, intrinsics, look_at, render_frames, world_to_camera
 from metal_gauss.viewer import (
     PreviewBudget,
     RenderScheduler,
+    SnapState,
     TrainClock,
     frame_size,
     import_viser,
     infer_up,
     intrinsics_vfov,
+    letterbox,
+    matrix_to_quat,
+    pose_matches,
     pose_to_viewmat,
     quat_to_matrix,
+    scale_K,
     vertical_fov,
+    vfov_from_K,
 )
 
 mps = pytest.mark.skipif(not torch.backends.mps.is_available(), reason="needs MPS")
@@ -341,6 +352,117 @@ def test_finishing_releases_a_pause_that_arrived_too_late(monkeypatch):
     live.finish()
     assert live.paused is False
     assert (live.pause_button.label, live.pause_button.disabled) == ("Pause", True)
+# ---------------------------------------------------------------- cameras
+
+@pytest.mark.parametrize("wxyz, R", [
+    ((1.0, 0.0, 0.0, 0.0), [[1, 0, 0], [0, 1, 0], [0, 0, 1]]),
+    ((S, S, 0.0, 0.0), [[1, 0, 0], [0, 0, -1], [0, 1, 0]]),        # quarter turn about x
+    ((S, 0.0, S, 0.0), [[0, 0, 1], [0, 1, 0], [-1, 0, 0]]),        # about y
+    ((S, 0.0, 0.0, S), [[0, -1, 0], [1, 0, 0], [0, 0, 1]]),        # about z
+    ((0.0, 1.0, 0.0, 0.0), [[1, 0, 0], [0, -1, 0], [0, 0, -1]]),   # half turn: w = 0
+    ((0.5, 0.5, 0.5, 0.5), [[0, 0, 1], [1, 0, 0], [0, 1, 0]]),     # 120 deg about (1,1,1)
+])
+def test_matrix_to_quat_recovers_known_rotations(wxyz, R):
+    """wxyz order, w >= 0. Frustums are placed with this, so a sign slip
+    points every camera the wrong way."""
+    got = matrix_to_quat(torch.tensor(R, dtype=torch.float32))
+    assert got == pytest.approx(wxyz, abs=1e-6)
+
+
+def test_matrix_to_quat_round_trips_arbitrary_rotations():
+    g = torch.Generator().manual_seed(7)
+    for _ in range(50):
+        q = torch.nn.functional.normalize(torch.randn(4, generator=g), dim=0)
+        R = quat_to_matrix(tuple(q.tolist()))
+        assert torch.allclose(quat_to_matrix(matrix_to_quat(R)), R, atol=1e-5)
+
+
+def test_vertical_fov_from_intrinsics():
+    K = torch.tensor([[70.0, 0.0, 64.0], [0.0, 50.0, 50.0], [0.0, 0.0, 1.0]])
+    assert vfov_from_K(K, 100) == pytest.approx(math.pi / 2)
+
+
+def test_scale_K_follows_each_axis_separately():
+    """Principal point included: a frame shrunk unevenly moves its centre."""
+    K = torch.tensor([[100.0, 0.0, 64.0], [0.0, 110.0, 48.0], [0.0, 0.0, 1.0]])
+    assert torch.allclose(scale_K(K, (128, 96), (64, 24)),
+                          torch.tensor([[50.0, 0.0, 32.0], [0.0, 27.5, 12.0], [0.0, 0.0, 1.0]]))
+
+
+def test_letterbox_pads_rows_when_the_frame_is_wider_than_the_window():
+    image = np.full((4, 8, 3), 200, dtype=np.uint8)
+    out = letterbox(image, 1.0, (10, 20, 30))
+    assert out.shape == (8, 8, 3)
+    assert (out[2:6] == 200).all()
+    assert (out[:2] == [10, 20, 30]).all() and (out[6:] == [10, 20, 30]).all()
+
+
+def test_letterbox_pads_columns_when_the_frame_is_narrower_than_the_window():
+    image = np.full((8, 4, 3), 200, dtype=np.uint8)
+    out = letterbox(image, 1.0, (10, 20, 30))
+    assert out.shape == (8, 8, 3)
+    assert (out[:, 2:6] == 200).all()
+    assert (out[:, :2] == [10, 20, 30]).all() and (out[:, 6:] == [10, 20, 30]).all()
+
+
+def test_letterbox_leaves_a_matching_frame_alone():
+    image = np.full((4, 8, 3), 200, dtype=np.uint8)
+    assert letterbox(image, 2.0, (0, 0, 0)).shape == (4, 8, 3)
+    assert letterbox(image, 8 / 4.2, (0, 0, 0)).shape == (4, 8, 3), "within a pixel"
+
+
+def _pose(wxyz, position):
+    return SimpleNamespace(wxyz=tuple(wxyz), position=tuple(position))
+
+
+def test_a_pose_matches_its_camera_but_not_a_moved_or_turned_one():
+    q = (S, 0.0, S, 0.0)
+    assert pose_matches(_pose(q, (1.0, 2.0, 3.0)), q, (1.0, 2.0, 3.0), tol=1e-3)
+    assert not pose_matches(_pose(q, (1.0, 2.0, 3.002)), q, (1.0, 2.0, 3.0), tol=1e-3)
+    one_degree = math.radians(1.0)
+    turned = (math.cos(0.5 * (math.pi / 2 + one_degree)), 0.0,
+              math.sin(0.5 * (math.pi / 2 + one_degree)), 0.0)
+    assert not pose_matches(_pose(turned, (1.0, 2.0, 3.0)), q, (1.0, 2.0, 3.0), tol=1e-3)
+
+
+def test_a_pose_matches_whatever_roll_the_browser_chose():
+    """viser rebuilds a camera from position, look_at and its own up direction,
+    so a rolled training camera comes back unrolled. Only where it is and where
+    it looks decide whether the browser arrived."""
+    roll = math.radians(30.0)
+    rolled = torch.tensor(quat_to_matrix((S, 0.0, S, 0.0)).tolist()) @ torch.tensor(
+        [[math.cos(roll), -math.sin(roll), 0.0], [math.sin(roll), math.cos(roll), 0.0],
+         [0.0, 0.0, 1.0]])
+    assert pose_matches(_pose(matrix_to_quat(rolled), (0.0, 0.0, 0.0)),
+                        (S, 0.0, S, 0.0), (0.0, 0.0, 0.0), tol=1e-3)
+
+
+def test_a_snap_survives_the_poses_on_the_way_in():
+    """The browser may report in-between poses before it reaches the camera."""
+    snap = SnapState()
+    assert [snap.update(m) for m in (False, False, True, True)] == [True, True, True, True]
+    assert snap.update(False) is False
+
+
+def test_a_snap_ends_when_the_camera_leaves():
+    snap = SnapState()
+    assert snap.update(True) is True
+    assert snap.update(False) is False
+
+
+def test_lazy_views_report_whether_they_have_been_decoded():
+    """The viewer draws held-out cameras only once decoded; it must not decode."""
+    decodes = []
+
+    def materialise():
+        decodes.append(1)
+        return ["a", "b"]
+
+    views = LazyViews(2, materialise)
+    assert not views.materialised
+    assert len(views) == 2 and not views.materialised and decodes == []
+    assert views[1] == "b"
+    assert views.materialised and decodes == [1]
 
 
 def test_missing_viser_names_the_extra(monkeypatch):

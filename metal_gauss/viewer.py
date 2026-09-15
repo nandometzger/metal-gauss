@@ -43,6 +43,7 @@ from collections.abc import Callable
 import torch
 
 from metal_gauss.api import render
+from metal_gauss.dataset import LazyViews
 from metal_gauss.io import Splats, load_ply
 from metal_gauss.render_path import (
     UP_AXES,
@@ -66,6 +67,107 @@ def quat_to_matrix(wxyz) -> torch.Tensor:
         [2.0 * (x * y + w * z), 1.0 - 2.0 * (x * x + z * z), 2.0 * (y * z - w * x)],
         [2.0 * (x * z - w * y), 2.0 * (y * z + w * x), 1.0 - 2.0 * (x * x + y * y)],
     ])
+
+
+def matrix_to_quat(R) -> tuple[float, float, float, float]:
+    """(w, x, y, z) with w >= 0 for a (3,3) rotation; the inverse of quat_to_matrix.
+
+    Branches on the largest of w, x, y, z so a half turn (w = 0) divides by
+    something large rather than by nearly nothing.
+    """
+    m = [[float(R[i][j]) for j in range(3)] for i in range(3)]
+    trace = m[0][0] + m[1][1] + m[2][2]
+    if trace > 0.0:
+        s = 2.0 * math.sqrt(1.0 + trace)
+        w, x, y, z = 0.25 * s, (m[2][1] - m[1][2]) / s, (m[0][2] - m[2][0]) / s, \
+            (m[1][0] - m[0][1]) / s
+    elif m[0][0] >= m[1][1] and m[0][0] >= m[2][2]:
+        s = 2.0 * math.sqrt(1.0 + m[0][0] - m[1][1] - m[2][2])
+        w, x, y, z = (m[2][1] - m[1][2]) / s, 0.25 * s, (m[0][1] + m[1][0]) / s, \
+            (m[0][2] + m[2][0]) / s
+    elif m[1][1] >= m[2][2]:
+        s = 2.0 * math.sqrt(1.0 - m[0][0] + m[1][1] - m[2][2])
+        w, x, y, z = (m[0][2] - m[2][0]) / s, (m[0][1] + m[1][0]) / s, 0.25 * s, \
+            (m[1][2] + m[2][1]) / s
+    else:
+        s = 2.0 * math.sqrt(1.0 - m[0][0] - m[1][1] + m[2][2])
+        w, x, y, z = (m[1][0] - m[0][1]) / s, (m[0][2] + m[2][0]) / s, \
+            (m[1][2] + m[2][1]) / s, 0.25 * s
+    if w < 0.0:
+        w, x, y, z = -w, -x, -y, -z
+    return (w, x, y, z)
+
+
+def vfov_from_K(K, H: int) -> float:
+    """Vertical FOV in radians of a camera with intrinsics K and H rows."""
+    return 2.0 * math.atan(0.5 * H / float(K[1][1]))
+
+
+def scale_K(K: torch.Tensor, src_wh: tuple[int, int], dst_wh: tuple[int, int]) -> torch.Tensor:
+    """Intrinsics for the same camera resampled from src_wh to dst_wh pixels."""
+    sx, sy = dst_wh[0] / src_wh[0], dst_wh[1] / src_wh[1]
+    out = K.clone()
+    out[0, 0] *= sx
+    out[0, 2] *= sx
+    out[1, 1] *= sy
+    out[1, 2] *= sy
+    return out
+
+
+def letterbox(image, target_aspect: float, fill) -> "np.ndarray":
+    """Centre an (H,W,3) uint8 frame in a canvas of `target_aspect` (W/H).
+
+    The browser stretches whatever it is sent over the whole window, so a
+    camera's frame has to be padded to the window's shape to keep its own:
+    rows when the frame is wider than the window, columns when it is narrower.
+    Within a pixel, unchanged.
+    """
+    import numpy as np
+
+    H, W = image.shape[:2]
+    rows = round(W / target_aspect) - H
+    cols = round(H * target_aspect) - W
+    if rows > 1:
+        out = np.empty((H + rows, W, 3), dtype=image.dtype)
+        out[:] = fill
+        out[rows // 2:rows // 2 + H] = image
+        return out
+    if cols > 1:
+        out = np.empty((H, W + cols, 3), dtype=image.dtype)
+        out[:] = fill
+        out[:, cols // 2:cols // 2 + W] = image
+        return out
+    return image
+
+
+def pose_matches(pose, wxyz, position, tol: float) -> bool:
+    """Whether a browser camera sits at `position` looking where `wxyz` looks.
+
+    Roll is ignored on purpose: viser rebuilds the camera from position,
+    look_at and its own up direction, so a rolled training camera always comes
+    back unrolled and a full quaternion comparison would never match.
+    """
+    forward = quat_to_matrix(pose.wxyz)[:, 2]
+    want = quat_to_matrix(wxyz)[:, 2]
+    return (math.dist(pose.position, position) < tol
+            and float(forward @ want) > 1.0 - 1e-5)
+
+
+class SnapState:
+    """Whether a client is still snapped to the camera it clicked.
+
+    The browser may report poses on its way to the camera, so a snap only ends
+    once the camera has been reached and then left.
+    """
+
+    def __init__(self) -> None:
+        self.reached = False
+
+    def update(self, matches: bool) -> bool:
+        if matches:
+            self.reached = True
+            return True
+        return not self.reached
 
 
 def pose_to_viewmat(wxyz, position, world_flip: torch.Tensor | None = None) -> torch.Tensor:
@@ -357,6 +459,23 @@ class _Client:
         self.lens_gen = -1
         self.views: list[torch.Tensor] = []
         self.acc: torch.Tensor | None = None
+        self.snap: _Snap | None = None
+
+
+@dataclasses.dataclass
+class _Snap:
+    """A client showing one training or held-out camera, clicked in the scene."""
+    split: str
+    index: int
+    view: object
+    wxyz: tuple[float, float, float, float]
+    position: tuple[float, float, float]
+    state: SnapState = dataclasses.field(default_factory=SnapState)
+    psnr: float | None = None
+
+
+def _centre_of(viewmat: torch.Tensor) -> torch.Tensor:
+    return -viewmat[:3, :3].T @ viewmat[:3, 3]
 
 
 class LiveView:
@@ -439,6 +558,7 @@ class LiveView:
                     if pose != client.pose:
                         client.pose = pose
                         client.scheduler.touch(time.monotonic())
+                        self._moved(client, pose)
                 self.wake.set()
 
             with client.lock:
@@ -455,6 +575,9 @@ class LiveView:
     def _clients(self) -> list[_Client]:
         with self.clients_lock:
             return list(self.clients.values())
+
+    def _moved(self, client: _Client, pose: _Pose) -> None:
+        """Called with client.lock held whenever a client's camera changed."""
 
     def touch_all(self) -> None:
         """A render setting changed: every client counts as moved."""
@@ -636,6 +759,134 @@ class TrainingView(LiveView):
         def _(_) -> None:
             self.budget.fraction = float(self.budget_slider.value)
 
+        self.scene = scene
+        self._centre = points.mean(dim=0)
+        centres = torch.stack([_centre_of(v.viewmat) for v in scene.train])
+        spread = max(float(torch.linalg.norm(centres - centres.mean(dim=0), dim=1).max()), 1e-3)
+        self._frustum_scale = 0.05 * spread
+        self._snap_tol = 1e-3 * spread
+        self._fill = tuple(int(round(255.0 * c)) for c in background)
+        self._frustums: list = []
+        self._heldout_drawn = False
+        with gui.add_folder("Cameras", order=-0.5):
+            self.show_cameras = gui.add_checkbox("Show cameras", initial_value=True)
+            self.show_photo = gui.add_checkbox(
+                "Show photo", initial_value=False,
+                hint="after clicking a camera, show its photograph in place of the render")
+
+        @self.show_cameras.on_update
+        def _(_) -> None:
+            for frustum in self._frustums:
+                frustum.visible = self.show_cameras.value
+
+        @self.show_photo.on_update
+        def _(_) -> None:
+            self.touch_all()
+
+        self._draw_cameras("train", scene.train)
+        self.heldout_ready()
+
+    def heldout_ready(self) -> None:
+        """Draw the held-out cameras once their split is decoded. Never decodes it.
+
+        A Blender scene decodes its 200 held-out images on first use, which was
+        4.1 s of startup; drawing their frustums must not be what triggers it.
+        """
+        heldout = self.scene.heldout
+        if self._heldout_drawn or (isinstance(heldout, LazyViews) and not heldout.materialised):
+            return
+        self._draw_cameras("heldout", heldout)
+        self._heldout_drawn = True
+
+    def _draw_cameras(self, split: str, views) -> None:
+        colour = (40, 110, 255) if split == "train" else (255, 140, 0)
+        for i, view in enumerate(views):
+            H, W = (int(s) for s in view.image.shape[:2])
+            frustum = self.server.scene.add_camera_frustum(
+                f"/cameras/{split}/{i}", fov=vfov_from_K(view.K, H), aspect=W / H,
+                scale=self._frustum_scale, color=colour,
+                wxyz=matrix_to_quat(view.viewmat[:3, :3].T),
+                position=_centre_of(view.viewmat).numpy(),
+                visible=self.show_cameras.value)
+            frustum.on_click(self._snapper(split, i, view))
+            self._frustums.append(frustum)
+
+    def _snapper(self, split: str, index: int, view):
+        def snap(event) -> None:
+            self._snap(event.client, split, index, view)
+        return snap
+
+    def _snap(self, handle, split: str, index: int, view) -> None:
+        """Move the clicking browser onto a camera, in one message."""
+        with self.clients_lock:
+            client = self.clients.get(handle.client_id)
+        if client is None:
+            return
+        c2w = view.viewmat[:3, :3].T
+        centre = _centre_of(view.viewmat)
+        depth = max(float((self._centre - centre) @ c2w[:, 2]), 1e-3)
+        snap = _Snap(split, index, view, matrix_to_quat(c2w), tuple(centre.tolist()))
+        with client.lock:
+            client.snap = snap
+            # Already sitting on this camera: no pose update will arrive to say so.
+            if client.pose is not None and pose_matches(client.pose, snap.wxyz,
+                                                        snap.position, self._snap_tol):
+                snap.state.update(True)
+            client.scheduler.touch(time.monotonic())
+        self._stats.pop("view", None)
+        with handle.atomic():
+            handle.camera.fov = vfov_from_K(view.K, int(view.image.shape[0]))
+            handle.camera.position = centre.numpy()
+            handle.camera.look_at = (centre + c2w[:, 2] * depth).numpy()
+        self.wake.set()
+
+    def _moved(self, client: _Client, pose: _Pose) -> None:
+        snap = client.snap
+        if snap is not None and not snap.state.update(
+                pose_matches(pose, snap.wxyz, snap.position, self._snap_tol)):
+            client.snap = None
+            self._stats.pop("view", None)
+            self._show_stats()
+
+    def _frame(self, client: _Client, job: Job, pose: _Pose, samples: int,
+               batch: SplatBatch):
+        """A snapped client sees its camera exactly: that view's own pose and K,
+        at the view's aspect, letterboxed into the window, so render and photo
+        share pixel coordinates. The lens path stays pose-based."""
+        with client.lock:
+            snap = client.snap
+        if snap is None or job.lens is not None:
+            return super()._frame(client, job, pose, samples, batch)
+        view = snap.view
+        H0, W0 = (int(s) for s in view.image.shape[:2])
+        W, H = frame_size(W0 / H0, int(self.max_resolution.value), job.scale)
+        if self.show_photo.value:
+            photo = view.image.permute(2, 0, 1)[None].float()
+            image = torch.nn.functional.interpolate(photo, size=(H, W), mode="area")[0] \
+                .permute(1, 2, 0).round().clamp(0, 255).to(torch.uint8).numpy()
+        else:
+            rgb = render_view(batch, view.viewmat, scale_K(view.K, (W0, H0), (W, H)),
+                              W, H, self.background, self.far)
+            image = (rgb * 255.0).round().to(torch.uint8).cpu().numpy()
+            if not job.preview and snap.psnr is None:
+                snap.psnr = self._view_psnr(view, batch)
+                if snap.split == "train":
+                    label = "train, no appearance correction"
+                else:
+                    label = "held-out"
+                self._stats["view"] = f"view {view.name} ({label}): {snap.psnr:.2f} dB"
+                self._show_stats()
+        image = letterbox(image, pose.aspect, self._fill)
+        return image.shape[1], image.shape[0], image
+
+    def _view_psnr(self, view, batch: SplatBatch) -> float:
+        """PSNR of one view at its native resolution, computed as evaluate() does."""
+        H, W = (int(s) for s in view.image.shape[:2])
+        rgb = render_view(batch, view.viewmat, view.K, W, H, self.background, self.far)
+        gt = view.image.to(rgb.device).float() / 255.0
+        mse = float(((rgb - gt) ** 2).mean())
+        return -10.0 * math.log10(max(mse, 1e-10))
+
     def after_step(self, step: int, active: int, loss: torch.Tensor, clock: TrainClock) -> None:
         if not self.clients:
             return
@@ -700,6 +951,8 @@ class TrainingView(LiveView):
             lines.append(" · ".join(parts))
         if "share" in s:
             lines.append(f"preview {s['share']:.0%} of wall-clock")
+        if s.get("view"):
+            lines.append(s["view"])
         if s.get("status"):
             lines.append(f"**{s['status']}**")
         self.stats.content = "  \n".join(lines) or "waiting for the first step"
