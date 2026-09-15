@@ -168,6 +168,28 @@ The server listens on localhost only. To view from another machine, tunnel it
 [viser](https://github.com/nerfstudio-project/viser) is an optional extra, so the base install
 does not pull it in.
 
+### Watch it train
+
+```bash
+metal-gauss-train --blender data/nerf_synthetic/lego --steps 7000 --viewer
+```
+
+The same page shows the model while it trains. It opens on the first training camera, with the up
+direction taken from the cameras themselves. It is rendered between optimisation steps, on the
+training thread, and may take at most `--viewer-budget` of wall-clock (10% by default, adjustable
+from the page). With no browser connected it costs nothing.
+
+- **Training panel:** step, loss, held-out PSNR, and the preview's share of wall-clock. **Pause**
+  gives the preview the whole GPU, lens included; paused time is left out of every reported time.
+- **Cameras:** the training cameras (blue) and held-out cameras (orange). Held-out cameras appear
+  once that split has been loaded for evaluation. Click one to jump to it.
+- **Snapped view:** shows that camera's PSNR, and **Show photo** swaps the render for its
+  photograph, pixel-aligned.
+- **When training ends,** the page keeps serving the final model until Ctrl-C.
+
+`--viewer` is off by default. The benchmark harness refuses reports from runs that used it, because
+the preview shares the GPU.
+
 ## ⚠️ Caveats
 
 - msplat is **1.3–1.8× faster per step**. Our fixed startup at that end was ~8.4 s and is now
