@@ -1,0 +1,471 @@
+"""Orbit a .ply in the browser, rendered on Metal.
+
+    metal-gauss-view scene.ply --up +z
+
+The rasteriser is fast enough to be interactive (bench/render_fps.py) and
+nothing used that. This serves a viser page: drag to orbit, scroll to dolly,
+and each view is rendered on this Mac's GPU and sent to the tab as a JPEG.
+viser is an optional extra, `pip install "metal-gauss[viewer]"`, so the
+package's own dependencies do not grow.
+
+The render loop is written here rather than taken from nerfview, the viser
+wrapper gsplat uses. nerfview 0.1.3 calls os._exit(1) on any exception in the
+render function, interrupts renders through sys.settrace, and tells its two
+render_fn signatures apart by catching TypeError, so a TypeError raised inside
+a render silently switches API. It also has no way to refine a defocused frame
+sample by sample, which is the one thing it would have had to do here.
+
+One thread owns every MPS call. viser's callbacks only record the newest pose
+and wake it; what to render next is decided by RenderScheduler, which is pure
+so it can be tested without a browser or a GPU. Copying frames off the GPU is
+not the cost worth avoiding: memory is unified, a 768x768 uint8 frame is
+1.7 MB, and the render and the JPEG encode dominate.
+
+The server binds to 127.0.0.1 unless told otherwise. viser's own default is
+0.0.0.0, which would serve the scene to the whole network.
+"""
+
+from __future__ import annotations
+
+import argparse
+import dataclasses
+import math
+import sys
+import threading
+import time
+import traceback
+
+import torch
+
+from metal_gauss.api import render
+from metal_gauss.io import Splats, load_ply
+from metal_gauss.render_path import (
+    UP_AXES,
+    _GL2CV,
+    aperture_views,
+    frame_cloud,
+    world_to_camera,
+)
+
+_UP_VECTORS = {"-y": (0.0, -1.0, 0.0), "+y": (0.0, 1.0, 0.0),
+               "+z": (0.0, 0.0, 1.0), "-z": (0.0, 0.0, -1.0)}
+
+
+# --------------------------------------------------------------- camera maths
+
+def quat_to_matrix(wxyz) -> torch.Tensor:
+    """(3,3) rotation from a unit quaternion in viser's (w, x, y, z) order."""
+    w, x, y, z = (float(v) for v in wxyz)
+    return torch.tensor([
+        [1.0 - 2.0 * (y * y + z * z), 2.0 * (x * y - w * z), 2.0 * (x * z + w * y)],
+        [2.0 * (x * y + w * z), 1.0 - 2.0 * (x * x + z * z), 2.0 * (y * z - w * x)],
+        [2.0 * (x * z - w * y), 2.0 * (y * z + w * x), 1.0 - 2.0 * (x * x + y * y)],
+    ])
+
+
+def pose_to_viewmat(wxyz, position, world_flip: torch.Tensor | None = None) -> torch.Tensor:
+    """World-to-camera matrix for a viser camera pose.
+
+    viser reports camera-to-world in OpenCV axes (+Z forward, +Y down), the
+    same axes `world_to_camera` takes, so no axis swap belongs here. An OpenGL
+    file is framed in the flipped world, and the flip is applied last.
+    """
+    vm = world_to_camera(quat_to_matrix(wxyz), torch.as_tensor(position, dtype=torch.float32))
+    return vm if world_flip is None else vm @ world_flip
+
+
+def vertical_fov(fov_h_deg: float, aspect: float) -> float:
+    """Horizontal FOV in degrees -> viser's vertical FOV in radians."""
+    return 2.0 * math.atan(math.tan(0.5 * math.radians(fov_h_deg)) / aspect)
+
+
+def intrinsics_vfov(W: int, H: int, fov_v: float) -> torch.Tensor:
+    """Intrinsics from a vertical FOV in radians, square pixels, centred."""
+    f = 0.5 * H / math.tan(0.5 * fov_v)
+    return torch.tensor([[f, 0.0, W / 2.0], [0.0, f, H / 2.0], [0.0, 0.0, 1.0]])
+
+
+def frame_size(aspect: float, max_side: int, scale: float) -> tuple[int, int]:
+    """(W, H) with the browser's aspect, the long side at max_side * scale.
+
+    Both sides are multiples of 16. That keeps the set of frame sizes small, so
+    the MPS allocator reuses buffers rather than allocating new ones every time
+    the preview scale or the window changes, and it matches the tile size.
+    """
+    long = max(16, int(max_side * scale) // 16 * 16)
+    short = max(16, round(long / max(aspect, 1.0 / aspect) / 16) * 16)
+    return (long, short) if aspect >= 1.0 else (short, long)
+
+
+# --------------------------------------------------------------- scheduling
+
+@dataclasses.dataclass(frozen=True)
+class Job:
+    """One frame for one client.
+
+    `lens` is the [start, stop) range of aperture samples to add to that
+    client's running mean, or None for a pinhole frame. `gen` identifies the
+    camera the job was issued for.
+    """
+    scale: float
+    lens: tuple[int, int] | None
+    preview: bool
+    gen: int
+
+    @property
+    def quality(self) -> int:
+        return 60 if self.preview else 90
+
+
+class RenderScheduler:
+    """What to render next for one client. Pure: the caller supplies the clock.
+
+    While the camera moves, one reduced-resolution pinhole preview per new
+    pose, at the largest scale step that fits the frame budget. Once it has
+    been still for SETTLE_S: one full-resolution pinhole frame, or with an
+    aperture, the lens refined at 8, 16, 32 and 64 samples and then all of
+    them. After that, nothing, so an untouched viewer leaves the GPU alone.
+    """
+
+    SETTLE_S = 0.15
+    FRAME_BUDGET_S = 1.0 / 30.0
+    SCALES = (0.25, 0.5, 0.75, 1.0)
+    CHECKPOINTS = (8, 16, 32, 64)
+
+    def __init__(self) -> None:
+        self._gen = 0
+        self._changed_at = -math.inf
+        self._dirty = False
+        self._full_done = False
+        self._lens_done = 0
+        self._stalled = False
+        self._scale = 1.0
+
+    def touch(self, now: float) -> None:
+        """The camera or a render setting changed."""
+        self._gen += 1
+        self._changed_at = now
+        self._dirty = True
+        self._full_done = False
+        self._lens_done = 0
+        self._stalled = False
+
+    def _moving(self, now: float) -> bool:
+        return now - self._changed_at < self.SETTLE_S
+
+    def next_job(self, now: float, samples: int) -> Job | None:
+        """`samples` is the aperture's sample count, 0 for a pinhole."""
+        if self._moving(now):
+            if not self._dirty:
+                return None
+            self._dirty = False
+            return Job(self._scale, None, True, self._gen)
+        if self._stalled:
+            return None
+        if samples <= 0:
+            return None if self._full_done else Job(1.0, None, False, self._gen)
+        if self._lens_done >= samples:
+            return None
+        stop = next(c for c in (*self.CHECKPOINTS, samples)
+                    if self._lens_done < c <= samples)
+        return Job(1.0, (self._lens_done, stop), False, self._gen)
+
+    def wait_s(self, now: float) -> float | None:
+        """Seconds until work appears without a new touch, or None if it will not."""
+        if self._moving(now) and not self._dirty:
+            return self.SETTLE_S - (now - self._changed_at)
+        return None
+
+    def done(self, job: Job, seconds: float) -> None:
+        """A job finished in `seconds`, encode included."""
+        if job.lens is None:
+            # Timing holds whichever camera it was for: cost scales with pixels.
+            per_full = seconds / (job.scale * job.scale)
+            fits = [s for s in self.SCALES if per_full * s * s <= self.FRAME_BUDGET_S]
+            self._scale = fits[-1] if fits else self.SCALES[0]
+        if job.gen != self._gen:
+            return
+        if job.lens is not None:
+            self._lens_done = job.lens[1]
+        elif not job.preview:
+            self._full_done = True
+
+    def failed(self, job: Job) -> None:
+        """Stop until the next change rather than retrying a failing render."""
+        if job.gen == self._gen:
+            self._stalled = True
+
+
+# --------------------------------------------------------------- rendering
+
+def render_view(sp: Splats, viewmat: torch.Tensor, K: torch.Tensor, W: int, H: int,
+                background, far: float) -> torch.Tensor:
+    """One (H,W,3) frame in [0,1] on the GPU, as `render_frames` draws it."""
+    rgb, _, _ = render(sp.means, sp.quats, sp.scales, sp.opacities, sp.sh,
+                       K, viewmat, W, H, sh_degree=sp.sh_degree, backend="metal",
+                       background=background, far=far)
+    return rgb.detach().clamp(0.0, 1.0)
+
+
+def import_viser():
+    try:
+        import viser
+    except ImportError as e:
+        raise SystemExit(
+            "metal-gauss-view needs viser, which is an optional extra: "
+            'pip install "metal-gauss[viewer]"') from e
+    return viser
+
+
+def scene_far(means: torch.Tensor, eye: torch.Tensor, target: torch.Tensor,
+              quantile: float = 0.98) -> float:
+    """A far plane that does not cull the scene when the camera dollies out.
+
+    The renderer's default of 100 is fine for a framed render and not for a
+    viewer, where the camera goes wherever it is dragged.
+    """
+    lo, hi = means.quantile(1.0 - quantile, dim=0), means.quantile(quantile, dim=0)
+    radius = float(torch.linalg.norm(hi - lo)) * 0.5
+    return max(100.0, 10.0 * (float(torch.linalg.norm(target - eye)) + radius))
+
+
+@dataclasses.dataclass(frozen=True)
+class _Pose:
+    wxyz: tuple[float, ...]
+    position: tuple[float, ...]
+    look_at: tuple[float, ...]
+    fov: float
+    aspect: float
+
+
+def _pose_of(camera) -> _Pose:
+    """The fields that change the image. Not image_width: that is device pixels,
+    which the browser changes on its own and must not restart refinement."""
+    return _Pose(tuple(float(v) for v in camera.wxyz),
+                 tuple(float(v) for v in camera.position),
+                 tuple(float(v) for v in camera.look_at),
+                 float(camera.fov), float(camera.aspect))
+
+
+class _Client:
+    def __init__(self, handle) -> None:
+        self.handle = handle
+        self.lock = threading.Lock()
+        self.scheduler = RenderScheduler()
+        self.pose: _Pose | None = None
+        self.lens_gen = -1
+        self.views: list[torch.Tensor] = []
+        self.acc: torch.Tensor | None = None
+
+
+class Viewer:
+    def __init__(self, viser, sp: Splats, args, eye: torch.Tensor, target: torch.Tensor,
+                 fov_h: float) -> None:
+        self.sp = sp
+        self.fov_h = fov_h
+        self.flip = _GL2CV if args.convention == "opengl" else None
+        self.background = (1.0, 1.0, 1.0) if args.background == "white" else (0.0, 0.0, 0.0)
+        self.far = scene_far(sp.means.detach().cpu(), eye, target)
+        self.clients: dict[int, _Client] = {}
+        self.clients_lock = threading.Lock()
+        self.wake = threading.Event()
+        self.stop = threading.Event()
+
+        # Build the Metal extension here, on one thread, before any client can
+        # ask for a frame: nothing in metal_backend._load guards a second caller.
+        with torch.no_grad():
+            render_view(sp, world_to_camera(torch.eye(3), eye), intrinsics_vfov(16, 16, 1.0),
+                        16, 16, self.background, self.far)
+
+        self.server = viser.ViserServer(host=args.host, port=args.port)
+        self.server.scene.set_up_direction(args.up)
+        # Set before any client connects: afterwards it only moves Reset View.
+        self.server.initial_camera.position = eye.numpy()
+        self.server.initial_camera.look_at = target.numpy()
+        self.server.initial_camera.up = _UP_VECTORS[args.up]
+
+        dist = float(torch.linalg.norm(target - eye))
+        gui = self.server.gui
+        with gui.add_folder("Render"):
+            self.max_resolution = gui.add_slider(
+                "Max resolution", min=256, max=2048, step=16,
+                initial_value=args.max_resolution)
+            self.readout = gui.add_markdown("waiting for the first frame")
+        with gui.add_folder("Lens"):
+            self.aperture = gui.add_slider(
+                "Aperture", min=0.0, max=0.1 * dist, step=0.001 * dist, initial_value=0.0,
+                hint="lens radius in world units; 0 is a pinhole")
+            self.auto_focus = gui.add_checkbox(
+                "Focus on orbit centre", initial_value=True)
+            self.focus = gui.add_slider(
+                "Focus distance", min=0.05 * dist, max=4.0 * dist, step=0.005 * dist,
+                initial_value=dist, disabled=True)
+            self.samples = gui.add_slider(
+                "Samples", min=8, max=128, step=8, initial_value=96)
+        self.status = gui.add_markdown("")
+
+        for handle in (self.max_resolution, self.aperture, self.focus, self.samples):
+            handle.on_update(lambda _: self._touch_all())
+
+        @self.auto_focus.on_update
+        def _(_) -> None:
+            self.focus.disabled = self.auto_focus.value
+            self._touch_all()
+
+        @self.server.on_client_connect
+        def _(handle) -> None:
+            client = _Client(handle)
+            handle.camera.fov = vertical_fov(self.fov_h, handle.camera.aspect)
+
+            @handle.camera.on_update
+            async def _(camera) -> None:
+                pose = _pose_of(camera)
+                with client.lock:
+                    if pose != client.pose:
+                        client.pose = pose
+                        client.scheduler.touch(time.monotonic())
+                self.wake.set()
+
+            with client.lock:
+                client.pose = _pose_of(handle.camera)
+            with self.clients_lock:
+                self.clients[handle.client_id] = client
+            self.wake.set()
+
+        @self.server.on_client_disconnect
+        def _(handle) -> None:
+            with self.clients_lock:
+                self.clients.pop(handle.client_id, None)
+
+    def _touch_all(self) -> None:
+        now = time.monotonic()
+        with self.clients_lock:
+            clients = list(self.clients.values())
+        for client in clients:
+            with client.lock:
+                client.scheduler.touch(now)
+        self.wake.set()
+
+    def serve(self) -> None:
+        thread = threading.Thread(target=self._loop, name="metal-gauss-view", daemon=True)
+        thread.start()
+        try:
+            while thread.is_alive():
+                thread.join(0.5)
+        except KeyboardInterrupt:
+            pass
+        finally:
+            self.stop.set()
+            self.wake.set()
+            thread.join()
+            self.server.stop()
+
+    def _loop(self) -> None:
+        with torch.no_grad():                   # thread-local, so entered here
+            while not self.stop.is_set():
+                self.wake.clear()
+                wait = None
+                worked = False
+                with self.clients_lock:
+                    clients = list(self.clients.values())
+                for client in clients:
+                    samples = int(self.samples.value) if self.aperture.value > 0 else 0
+                    now = time.monotonic()
+                    with client.lock:
+                        pose = client.pose
+                        job = client.scheduler.next_job(now, samples)
+                        until = client.scheduler.wait_s(now)
+                    if job is None:
+                        if until is not None:
+                            wait = until if wait is None else min(wait, until)
+                        continue
+                    worked = True
+                    t0 = time.perf_counter()
+                    try:
+                        W, H, image = self._frame(client, job, pose, samples)
+                        client.handle.scene.set_background_image(
+                            image, format="jpeg", jpeg_quality=job.quality)
+                    except Exception as e:
+                        traceback.print_exc()
+                        self.status.content = f"**render failed:** `{type(e).__name__}: {e}`"
+                        with client.lock:
+                            client.scheduler.failed(job)
+                        continue
+                    seconds = time.perf_counter() - t0
+                    with client.lock:
+                        client.scheduler.done(job, seconds)
+                    self._report(job, W, H, seconds)
+                if not worked:
+                    self.wake.wait(timeout=wait)
+
+    def _frame(self, client: _Client, job: Job, pose: _Pose, samples: int):
+        W, H = frame_size(pose.aspect, int(self.max_resolution.value), job.scale)
+        K = intrinsics_vfov(W, H, pose.fov)
+        if job.lens is None:
+            vm = pose_to_viewmat(pose.wxyz, pose.position, self.flip)
+            rgb = render_view(self.sp, vm, K, W, H, self.background, self.far)
+        else:
+            if client.lens_gen != job.gen:
+                R = quat_to_matrix(pose.wxyz)
+                eye = torch.tensor(pose.position, dtype=torch.float32)
+                focus = (math.dist(pose.look_at, pose.position) if self.auto_focus.value
+                         else float(self.focus.value))
+                views = aperture_views(eye, eye + R[:, 2] * focus,
+                                       float(self.aperture.value), samples, R0=R)
+                client.views = views if self.flip is None else [v @ self.flip for v in views]
+                client.acc = None
+                client.lens_gen = job.gen
+            start, stop = job.lens
+            for vm in client.views[start:stop]:
+                frame = render_view(self.sp, vm, K, W, H, self.background, self.far)
+                client.acc = frame if client.acc is None else client.acc + frame
+            rgb = client.acc / stop
+        image = (rgb * 255.0).round().to(torch.uint8).cpu().numpy()
+        return W, H, image
+
+    def _report(self, job: Job, W: int, H: int, seconds: float) -> None:
+        text = f"{1000.0 * seconds:.1f} ms/frame · {len(self.sp):,} splats · {W}×{H}"
+        if job.lens is not None:
+            text += f" · {job.lens[1]} samples"
+        else:
+            text += f" · {1.0 / seconds:.0f} fps"
+        self.readout.content = text
+        if self.status.content:
+            self.status.content = ""
+
+
+def main(argv: list[str] | None = None) -> int:
+    ap = argparse.ArgumentParser(
+        prog="metal-gauss-view",
+        description="Orbit a .ply in the browser, rendered on Metal.")
+    ap.add_argument("ply")
+    ap.add_argument("--up", choices=UP_AXES, default="-y",
+                    help="the scene's vertical axis. -y is the OpenCV world; a "
+                         "scene trained with --blender is +z. Negative axes need "
+                         "the = form: --up=-z.")
+    ap.add_argument("--background", choices=("white", "black"), default="white")
+    ap.add_argument("--convention", choices=("opencv", "opengl"), default="opencv",
+                    help="frame the .ply is written in")
+    ap.add_argument("--fov", type=float, default=None,
+                    help="horizontal FOV in degrees, as for metal-gauss-render")
+    ap.add_argument("--max-resolution", type=int, default=1024,
+                    help="long side of a settled frame, in pixels")
+    ap.add_argument("--host", default="127.0.0.1",
+                    help="address to serve on; 0.0.0.0 serves the scene to the network")
+    ap.add_argument("--port", type=int, default=8080)
+    a = ap.parse_args(argv)
+
+    viser = import_viser()
+    if not torch.backends.mps.is_available():
+        raise SystemExit("metal-gauss-view renders on Metal and needs MPS.")
+
+    sp = load_ply(a.ply, device="mps")
+    print(f"{len(sp):,} splats, SH degree {sp.sh_degree}", file=sys.stderr)
+    _, fov_h, eye, target = frame_cloud(sp.means.detach().cpu(), "auto", a.up,
+                                        a.convention, a.fov)
+    Viewer(viser, sp, a, eye, target, fov_h).serve()
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
