@@ -93,6 +93,7 @@ the step count; `--budget` overrides it. Blender scenes are **not vendored** —
 metal-gauss-render prediction.ply --out frame0.png --still --like-photo portrait.jpg
 metal-gauss-render prediction.ply --out wiggle.mp4 --like-photo portrait.jpg
 metal-gauss-render scene.ply --out orbit.mp4 --frame bbox --path orbit --sweep-deg 20
+metal-gauss-render lego.ply --out lego.mp4 --frame bbox --up +z --path orbit --sweep-deg 60
 ```
 
 Renders an existing `.ply` along a camera path the tool generates itself, so a file is no longer tied
@@ -104,7 +105,10 @@ and `--resolution`, `--fov`, `--background` and `--convention` do what they say.
 
 `--frame input` anchors on the predicting camera, because a monocular predictor works in the input
 photograph's frame and the identity world-to-camera matrix reproduces that shot. `--frame bbox`
-places the camera around the cloud instead, for a trained scene that has no input camera. The
+places the camera around the cloud instead, for a trained scene that has no input camera, level
+with it and orbiting its vertical axis. `--up` says which axis that is: the default `-y` is the
+OpenCV world, and a scene trained with `--blender` keeps Blender's Z-up world, so it needs
+`--up +z` or it is seen from underneath (`--up=-z` for a negative axis). The
 default `auto` picks by the fraction of splats sitting in front of the origin, taking `input` above
 **99%**.
 

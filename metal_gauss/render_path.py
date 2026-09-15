@@ -46,6 +46,20 @@ from metal_gauss.io import Splats, load_ply
 # Same flip `bench/compare/score_ply.py` applies to Blender cameras.
 _GL2CV = torch.diag(torch.tensor([1.0, -1.0, -1.0, 1.0]))
 
+# The world's up axis, spelled the way viser spells it. "-y" is the OpenCV world
+# every path here was first written for; a scene trained with --blender keeps
+# Blender's world, which is "+z". Stored as the DOWN vector `look_at` builds from,
+# written out rather than negated so the default stays bit-identical (-0.0).
+_DOWN = {"-y": (0.0, 1.0, 0.0), "+y": (0.0, -1.0, 0.0),
+         "+z": (0.0, 0.0, -1.0), "-z": (0.0, 0.0, 1.0)}
+UP_AXES = tuple(_DOWN)
+
+
+def _down(up: str) -> torch.Tensor:
+    if up not in _DOWN:
+        raise ValueError(f"unknown up axis {up!r}; expected one of {UP_AXES}")
+    return torch.tensor(_DOWN[up])
+
 
 # --------------------------------------------------------------- camera
 
@@ -57,6 +71,17 @@ def _rot_x(a: float) -> torch.Tensor:
 def _rot_y(a: float) -> torch.Tensor:
     c, s = math.cos(a), math.sin(a)
     return torch.tensor([[c, 0.0, s], [0.0, 1.0, 0.0], [-s, 0.0, c]])
+
+
+def _rot_z(a: float) -> torch.Tensor:
+    c, s = math.cos(a), math.sin(a)
+    return torch.tensor([[c, -s, 0.0], [s, c, 0.0], [0.0, 0.0, 1.0]])
+
+
+# Yaw turns about the DOWN vector, which for "-y" is exactly the _rot_y the
+# paths were built on, so every up axis swings the same way on screen.
+_YAW = {"-y": _rot_y, "+y": lambda a: _rot_y(-a),
+        "+z": lambda a: _rot_z(-a), "-z": _rot_z}
 
 
 def world_to_camera(R: torch.Tensor, C: torch.Tensor) -> torch.Tensor:
@@ -97,20 +122,29 @@ def pivot_depth(means: torch.Tensor, fov_deg: float | None = None,
     return float(near_axis.quantile(quantile))
 
 
-def look_at(eye: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
+def look_at(eye: torch.Tensor, target: torch.Tensor, up: str = "-y") -> torch.Tensor:
     """Camera-to-world rotation looking from `eye` at `target`, OpenCV axes.
 
-    +Z forward and +Y DOWN, so the basis is built from a world-down vector. A
-    helper written for the +Y-up convention rolls the camera 180 degrees here.
+    +Z forward and +Y DOWN, so the basis is built from the world's down vector,
+    which `up` names. A helper written for the +Y-up convention rolls the camera
+    180 degrees here; a Z-up scene framed as if Y were vertical is seen from
+    underneath.
     """
+    down = _down(up)
+    # Looking straight along the vertical, fall back to the axis the framing
+    # itself looks along.
+    fallback = (0.0, 0.0, 1.0) if up in ("-y", "+y") else (0.0, 1.0, 0.0)
+    return _aim(eye, target, down, torch.tensor(fallback))
+
+
+def _aim(eye, target, down: torch.Tensor, fallback: torch.Tensor) -> torch.Tensor:
     z = target - eye
     n = torch.linalg.norm(z)
     if n < 1e-9:
         raise ValueError("camera and target coincide")
     z = z / n
-    down = torch.tensor([0.0, 1.0, 0.0])
     if torch.linalg.norm(torch.linalg.cross(down, z)) < 1e-6:
-        down = torch.tensor([0.0, 0.0, 1.0])   # looking along the down axis
+        down = fallback
     x = torch.linalg.cross(down, z)
     x = x / torch.linalg.norm(x)
     y = torch.linalg.cross(z, x)
@@ -118,7 +152,8 @@ def look_at(eye: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
 
 
 def camera_path(eye, target, frames: int, sweep_deg: float,
-                path: str = "wiggle", pitch_ratio: float = 0.5) -> list[torch.Tensor]:
+                path: str = "wiggle", pitch_ratio: float = 0.5,
+                up: str = "-y") -> list[torch.Tensor]:
     """World-to-camera matrices swinging the camera about `target`.
 
     Both paths are built on sin(t) over a full period, so frame 0 is exactly the
@@ -127,20 +162,22 @@ def camera_path(eye, target, frames: int, sweep_deg: float,
     result has to loop cleanly when it plays on hover.
 
     `wiggle` adds a sin(2t) pitch, a figure-eight that reads as a head shifting
-    rather than a turntable.
+    rather than a turntable. The yaw turns about the vertical `up` names; the
+    pitch stays about world X, which is horizontal for every framing here.
     """
     if path not in ("orbit", "wiggle"):
         raise ValueError(f"unknown path {path!r}; expected 'orbit' or 'wiggle'")
     eye = torch.as_tensor(eye, dtype=torch.float32)
     target = torch.as_tensor(target, dtype=torch.float32)
-    R0 = look_at(eye, target)
+    R0 = look_at(eye, target, up)
+    yaw_about = _YAW[up]
     sweep = math.radians(sweep_deg)
     out = []
     for i in range(frames):
         t = 2.0 * math.pi * i / frames
         yaw = sweep * math.sin(t)
         pitch = sweep * pitch_ratio * math.sin(2.0 * t) if path == "wiggle" else 0.0
-        R = _rot_y(yaw) @ _rot_x(pitch)
+        R = yaw_about(yaw) @ _rot_x(pitch)
         out.append(world_to_camera(R @ R0, target + R @ (eye - target)))
     return out
 
@@ -148,7 +185,8 @@ def camera_path(eye, target, frames: int, sweep_deg: float,
 GOLDEN_ANGLE = math.pi * (3.0 - math.sqrt(5.0))
 
 
-def aperture_views(eye, target, radius: float, samples: int) -> list[torch.Tensor]:
+def aperture_views(eye, target, radius: float, samples: int, up: str = "-y",
+                   R0: torch.Tensor | None = None) -> list[torch.Tensor]:
     """World-to-camera matrices for one thin lens, all focused on one plane.
 
     A thin lens is many pinhole views spread over the lens area, averaged, with
@@ -174,39 +212,54 @@ def aperture_views(eye, target, radius: float, samples: int) -> list[torch.Tenso
     at radius 0.03 the two differ by at most 10.5 levels out of 255 at a single
     pixel and 0.10 on average, and at radius 0.15 by 23.9 and 0.65. So it does
     not matter at ordinary apertures and does grow with the radius.
+
+    `R0` is the camera-to-world rotation of the pinhole being defocused, for a
+    camera that did not come from `look_at` -- the viewer's, which orbits
+    freely. Rebuilding each sample upright from `up` would roll such a camera;
+    given R0 the samples keep its roll, and radius 0 returns it exactly.
+    `target` is then the focal point on its axis.
     """
     if samples < 1:
         raise ValueError("need at least one aperture sample")
     eye = torch.as_tensor(eye, dtype=torch.float32)
     target = torch.as_tensor(target, dtype=torch.float32)
+    own_rotation = R0 is not None
+    if R0 is None:
+        R0 = look_at(eye, target, up)
     if radius <= 0.0:
-        return [world_to_camera(look_at(eye, target), eye)]
+        return [world_to_camera(R0, eye)]
 
-    R0 = look_at(eye, target)
-    right, up = R0[:, 0], R0[:, 1]      # lens plane, perpendicular to the axis
+    right, down = R0[:, 0], R0[:, 1]    # lens plane, perpendicular to the axis
     out = []
     for i in range(samples):
         r = radius * math.sqrt((i + 0.5) / samples)
         a = i * GOLDEN_ANGLE
-        e = eye + right * (r * math.cos(a)) + up * (r * math.sin(a))
-        out.append(world_to_camera(look_at(e, target), e))
+        e = eye + right * (r * math.cos(a)) + down * (r * math.sin(a))
+        R = _aim(e, target, down, R0[:, 2]) if own_rotation else look_at(e, target, up)
+        out.append(world_to_camera(R, e))
     return out
 
 
 def bbox_framing(means: torch.Tensor, fov_deg: float, margin: float = 1.25,
-                 quantile: float = 0.98) -> tuple[torch.Tensor, torch.Tensor]:
+                 quantile: float = 0.98, up: str = "-y") -> tuple[torch.Tensor, torch.Tensor]:
     """(eye, target) for a .ply that did not come from a monocular predictor.
 
     A trained scene sits around its own origin with no input camera to anchor
     to, so the camera has to be placed rather than assumed. Robust percentiles
     again: a few stray splats a long way out would otherwise set the framing.
+
+    The camera sits level with the target, back along -Z when Y is vertical and
+    along -Y when Z is, which is Blender's front view. Always backing off along
+    -Z put a Z-up scene's camera underneath it, looking up.
     """
+    _down(up)
     lo = means.quantile(1.0 - quantile, dim=0)
     hi = means.quantile(quantile, dim=0)
     target = 0.5 * (lo + hi)
     radius = float(torch.linalg.norm(hi - lo)) * 0.5
     dist = margin * radius / max(math.tan(0.5 * math.radians(fov_deg)), 1e-6)
-    return target - torch.tensor([0.0, 0.0, dist]), target
+    back = [0.0, 0.0, dist] if up in ("-y", "+y") else [0.0, dist, 0.0]
+    return target - torch.tensor(back), target
 
 
 def intrinsics(W: int, H: int, fov_deg: float) -> torch.Tensor:
@@ -303,6 +356,58 @@ def fov_from_photo(path: str | Path) -> tuple[float, float]:
     W, H = im.size
     return fov_from_focal_35mm(float(f35), W, H), float(f35)
 
+
+def frame_cloud(means: torch.Tensor, frame: str = "auto", up: str = "-y",
+                convention: str = "opencv", fov: float | None = None,
+                like_photo: str | None = None, depth: float | None = None):
+    """(frame_mode, fov, eye, target): where the camera goes, in OpenCV world axes.
+
+    With `convention="opengl"` the renderer applies _GL2CV to the world, so the
+    cloud is flipped the same way before any of it is measured. Framing the
+    file's own coordinates aimed the camera at a mirror image of the scene: a
+    cloud centred at y=1, z=5 rendered with none of it in front of the camera,
+    and an OpenGL monocular prediction was never recognised as one.
+    """
+    if convention == "opengl":
+        means = means * torch.tensor([1.0, -1.0, -1.0])
+
+    frame_mode = frame
+    if frame_mode == "auto":
+        ahead = in_front_fraction(means)
+        frame_mode = "input" if ahead > 0.99 else "bbox"
+        print(f"{100 * ahead:.1f}% of splats in front of the origin "
+              f"-> --frame {frame_mode}", file=sys.stderr)
+
+    if frame_mode == "input":
+        if up != "-y":
+            raise SystemExit(
+                f"--up {up} does not apply to input framing: the input camera is "
+                "OpenCV, so its up is -y. Use --frame bbox for a trained scene.")
+        if fov is None:
+            if like_photo:
+                fov, f35 = fov_from_photo(like_photo)
+                print(f"{like_photo}: {f35:g}mm (35mm equiv) -> {fov:.2f} deg",
+                      file=sys.stderr)
+            else:
+                fov = framing_fov(means)
+                print("WARNING: no focal length given, so the FOV is fitted to the "
+                      "cloud. The geometry is right but the crop is not the one the "
+                      "prediction was made under, so frame 0 will NOT reproduce the "
+                      "source photograph. Pass --like-photo or --fov.", file=sys.stderr)
+        # after the FOV, because the cone that finds the subject is sized by it
+        if depth is None:
+            depth = pivot_depth(means, fov)
+        if not math.isfinite(depth) or depth <= 1e-3:
+            raise SystemExit(
+                f"subject depth is {depth:.4g}, so the cloud is not in front of "
+                "the input camera. This .ply did not come from a monocular "
+                "predictor; use --frame bbox.")
+        eye, target = torch.zeros(3), torch.tensor([0.0, 0.0, float(depth)])
+    else:
+        fov = fov if fov is not None else 45.0
+        eye, target = bbox_framing(means, fov, up=up)
+    return frame_mode, fov, eye, target
+
 # --------------------------------------------------------------- rendering
 
 def render_frames(sp: Splats, views: list[torch.Tensor], K: torch.Tensor,
@@ -323,11 +428,28 @@ def render_frames(sp: Splats, views: list[torch.Tensor], K: torch.Tensor,
         yield rgb.detach().clamp(0.0, 1.0)
 
 
-def render_defocused(sp: Splats, eye, target, K: torch.Tensor, W: int, H: int,
-                     radius: float = 0.0, samples: int = 1,
-                     background=(1.0, 1.0, 1.0), backend: str = "metal"):
+def lens_views(vm: torch.Tensor, focus: float, radius: float, samples: int,
+               up: str = "-y", world_flip: torch.Tensor | None = None) -> list[torch.Tensor]:
+    """The aperture's views around the pinhole view `vm`, focused `focus` along its axis.
+
+    Each path view becomes its own little lens: recover that view's centre and
+    axis, then spread the aperture around it. `world_flip` is the convention
+    flip `vm` already carries. The lens is built in the OpenCV world and flipped
+    afterwards; rebuilt from the flipped matrix, every sample was aimed with the
+    other world's up and the defocused image came out upside down.
+    """
+    if world_flip is not None:
+        vm = vm @ world_flip                 # a diagonal of +-1 is its own inverse
+    c = -vm[:3, :3].T @ vm[:3, 3]
+    t = c + vm[:3, :3][2] * focus
+    views = aperture_views(c, t, radius, samples, up=up)
+    return views if world_flip is None else [v @ world_flip for v in views]
+
+
+def render_defocused(sp: Splats, views: list[torch.Tensor], K: torch.Tensor,
+                     W: int, H: int, background=(1.0, 1.0, 1.0),
+                     backend: str = "metal"):
     """One defocused frame: the mean of the aperture's views."""
-    views = aperture_views(eye, target, radius, samples)
     acc = None
     for frame in render_frames(sp, views, K, W, H, background=background, backend=backend):
         acc = frame if acc is None else acc + frame
@@ -401,6 +523,10 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--convention", choices=("opencv", "opengl"), default="opencv",
                     help="frame the .ply is written in. If the first frame comes "
                          "out flipped, it is the other one.")
+    ap.add_argument("--up", choices=UP_AXES, default="-y",
+                    help="the scene's vertical axis, for --frame bbox. -y is the "
+                         "OpenCV world; a scene trained with --blender is +z. "
+                         "Negative axes need the = form: --up=-z.")
     ap.add_argument("--backend", choices=("metal", "torch_ref"), default="metal")
     ap.add_argument("--aperture", type=float, default=0.0,
                     help="lens radius in world units. 0 is a pinhole, which is "
@@ -424,44 +550,16 @@ def main(argv: list[str] | None = None) -> int:
     means_cpu = sp.means.detach().cpu()
     print(f"{len(sp)} splats, SH degree {sp.sh_degree}", file=sys.stderr)
 
-    frame_mode = a.frame
-    if frame_mode == "auto":
-        ahead = in_front_fraction(means_cpu)
-        frame_mode = "input" if ahead > 0.99 else "bbox"
-        print(f"{100 * ahead:.1f}% of splats in front of the origin "
-              f"-> --frame {frame_mode}", file=sys.stderr)
-
-    if frame_mode == "input":
-        if a.fov is not None:
-            fov = a.fov
-        elif a.like_photo:
-            fov, f35 = fov_from_photo(a.like_photo)
-            print(f"{a.like_photo}: {f35:g}mm (35mm equiv) -> {fov:.2f} deg",
-                  file=sys.stderr)
-        else:
-            fov = framing_fov(means_cpu)
-            print("WARNING: no focal length given, so the FOV is fitted to the "
-                  "cloud. The geometry is right but the crop is not the one the "
-                  "prediction was made under, so frame 0 will NOT reproduce the "
-                  "source photograph. Pass --like-photo or --fov.", file=sys.stderr)
-        # after the FOV, because the cone that finds the subject is sized by it
-        depth = a.depth if a.depth is not None else pivot_depth(means_cpu, fov)
-        if not math.isfinite(depth) or depth <= 1e-3:
-            raise SystemExit(
-                f"subject depth is {depth:.4g}, so the cloud is not in front of "
-                "the input camera. This .ply did not come from a monocular "
-                "predictor; use --frame bbox.")
-        eye, target = torch.zeros(3), torch.tensor([0.0, 0.0, float(depth)])
-    else:
-        fov = a.fov if a.fov is not None else 45.0
-        eye, target = bbox_framing(means_cpu, fov)
+    frame_mode, fov, eye, target = frame_cloud(
+        means_cpu, a.frame, a.up, a.convention, a.fov, a.like_photo, a.depth)
 
     W = H = a.resolution
     K = intrinsics(W, H, fov)
     views = camera_path(eye, target, 1 if a.still else a.frames,
-                        a.sweep_deg, a.path, a.pitch_ratio)
-    if a.convention == "opengl":
-        views = [vm @ _GL2CV for vm in views]
+                        a.sweep_deg, a.path, a.pitch_ratio, up=a.up)
+    flip = _GL2CV if a.convention == "opengl" else None
+    if flip is not None:
+        views = [vm @ flip for vm in views]
 
     print(f"framing {frame_mode}, target {[round(float(v), 3) for v in target]}, "
           f"fov {fov:.1f} deg, {len(views)} frames, sweep +/-{a.sweep_deg} deg",
@@ -477,12 +575,9 @@ def main(argv: list[str] | None = None) -> int:
 
         def frames_gen():
             for vm in views:
-                # Each path view becomes its own little lens: recover that
-                # view's centre and axis, then spread the aperture around it.
-                c = -vm[:3, :3].T @ vm[:3, 3]
-                t = c + vm[:3, :3][2] * focus
-                yield render_defocused(sp, c, t, K, W, H, radius=a.aperture,
-                                       samples=a.aperture_samples,
+                lens = lens_views(vm, focus, a.aperture, a.aperture_samples,
+                                  up=a.up, world_flip=flip)
+                yield render_defocused(sp, lens, K, W, H,
                                        background=bg, backend=a.backend)
         frames = frames_gen()
     else:
