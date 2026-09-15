@@ -40,6 +40,7 @@ from metal_gauss.viewer import (
     scale_K,
     vertical_fov,
     vfov_from_K,
+    frustums_at_eyes,
 )
 
 mps = pytest.mark.skipif(not torch.backends.mps.is_available(), reason="needs MPS")
@@ -465,6 +466,20 @@ def test_a_snap_ends_when_the_camera_leaves():
     snap = SnapState()
     assert snap.update(True) is True
     assert snap.update(False) is False
+
+
+def test_the_frustum_a_browser_eye_sits_on_is_the_one_to_hide():
+    """A frustum whose apex is the eye catches every click, at distance zero.
+
+    Found in the browser: clicks on three different frustums all arrived as
+    train/0, the camera the view had opened on, so nothing else could be
+    snapped to. Hidden frustums are not pickable.
+    """
+    centres = torch.tensor([[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 2.0, 0.0]])
+    assert frustums_at_eyes(centres, [], 0.2) == set()
+    assert frustums_at_eyes(centres, [(0.0, 0.0, 0.0)], 0.2) == {0}
+    assert frustums_at_eyes(centres, [(1.05, 0.0, 0.0), (0.0, 2.0, 0.1)], 0.2) == {1, 2}
+    assert frustums_at_eyes(centres, [(0.5, 0.0, 0.0)], 0.2) == set()
 
 
 def test_lazy_views_report_whether_they_have_been_decoded():
