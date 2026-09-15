@@ -183,6 +183,20 @@ class SnapState:
         return not self.reached
 
 
+def frustums_at_eyes(centres: torch.Tensor, eyes, radius: float) -> set[int]:
+    """Indices of camera frustums with some browser's eye within `radius` of their apex.
+
+    A frustum's lines start at its camera centre. With the eye on that centre,
+    every click ray leaves from a point on those lines, so that frustum wins
+    every pick and no other camera can be clicked. Those frustums are hidden,
+    and hidden ones are not pickable.
+    """
+    if not eyes or centres.numel() == 0:
+        return set()
+    d = torch.cdist(torch.as_tensor(eyes, dtype=centres.dtype), centres)
+    return set(torch.nonzero((d < radius).any(dim=0)).flatten().tolist())
+
+
 def pose_to_viewmat(wxyz, position, world_flip: torch.Tensor | None = None) -> torch.Tensor:
     """World-to-camera matrix for a viser camera pose.
 
@@ -582,12 +596,14 @@ class LiveView:
                 client.pose = _pose_of(handle.camera)
             with self.clients_lock:
                 self.clients[handle.client_id] = client
+            self._connected()
             self.wake.set()
 
         @self.server.on_client_disconnect
         def _(handle) -> None:
             with self.clients_lock:
                 self.clients.pop(handle.client_id, None)
+            self._connected()
 
     def _clients(self) -> list[_Client]:
         with self.clients_lock:
@@ -595,6 +611,9 @@ class LiveView:
 
     def _moved(self, client: _Client, pose: _Pose) -> None:
         """Called with client.lock held whenever a client's camera changed."""
+
+    def _connected(self) -> None:
+        """Called after a client joined or left, with no lock held."""
 
     def touch_all(self) -> None:
         """A render setting changed: every client counts as moved."""
@@ -784,6 +803,8 @@ class TrainingView(LiveView):
         self._snap_tol = 1e-3 * spread
         self._fill = tuple(int(round(255.0 * c)) for c in background)
         self._frustums: list = []
+        self._frustum_centres: list[torch.Tensor] = []
+        self._frustum_shown: list[bool] = []
         self._heldout_drawn = False
         with gui.add_folder("Cameras", order=-0.5):
             self.show_cameras = gui.add_checkbox("Show cameras", initial_value=True)
@@ -793,8 +814,7 @@ class TrainingView(LiveView):
 
         @self.show_cameras.on_update
         def _(_) -> None:
-            for frustum in self._frustums:
-                frustum.visible = self.show_cameras.value
+            self._sync_frustums()
 
         @self.show_photo.on_update
         def _(_) -> None:
@@ -814,19 +834,49 @@ class TrainingView(LiveView):
             return
         self._draw_cameras("heldout", heldout)
         self._heldout_drawn = True
+        self._sync_frustums()
 
     def _draw_cameras(self, split: str, views) -> None:
         colour = (40, 110, 255) if split == "train" else (255, 140, 0)
         for i, view in enumerate(views):
             H, W = (int(s) for s in view.image.shape[:2])
+            centre = _centre_of(view.viewmat)
             frustum = self.server.scene.add_camera_frustum(
                 f"/cameras/{split}/{i}", fov=vfov_from_K(view.K, H), aspect=W / H,
                 scale=self._frustum_scale, color=colour,
+                # Pixels, not world units: world-width lines were too thin to
+                # click far away and swelled into bars over the render up close.
+                thickness=4.0, thickness_units="screen",
                 wxyz=matrix_to_quat(view.viewmat[:3, :3].T),
-                position=_centre_of(view.viewmat).numpy(),
+                position=centre.numpy(),
                 visible=self.show_cameras.value)
             frustum.on_click(self._snapper(split, i, view))
             self._frustums.append(frustum)
+            self._frustum_centres.append(centre)
+            self._frustum_shown.append(bool(self.show_cameras.value))
+
+    def _sync_frustums(self) -> None:
+        """Show every frustum except those a browser's eye sits on.
+
+        Client poses are read without their locks: a pose is replaced whole,
+        never mutated, and a stale read is corrected by the next camera update.
+        """
+        # A browser left open reconnects the moment the server starts, which is
+        # before __init__ has drawn anything.
+        if not getattr(self, "_frustums", None):
+            return
+        eyes = [c.pose.position for c in self._clients() if c.pose is not None]
+        at_eye = frustums_at_eyes(torch.stack(self._frustum_centres), eyes,
+                                  self._frustum_scale)
+        show = bool(self.show_cameras.value)
+        for i, frustum in enumerate(self._frustums):
+            want = show and i not in at_eye
+            if self._frustum_shown[i] != want:
+                frustum.visible = want
+                self._frustum_shown[i] = want
+
+    def _connected(self) -> None:
+        self._sync_frustums()
 
     def _snapper(self, split: str, index: int, view):
         def snap(event) -> None:
@@ -864,6 +914,7 @@ class TrainingView(LiveView):
             client.snap = None
             self._stats.pop("view", None)
             self._show_stats()
+        self._sync_frustums()
 
     def _frame(self, client: _Client, job: Job, pose: _Pose, samples: int,
                batch: SplatBatch):
