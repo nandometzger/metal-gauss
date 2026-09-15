@@ -18,7 +18,7 @@ or opt in to the hosted Apple Silicon job.
 ```bash
 uv venv --python 3.12 .venv
 uv pip install --python .venv/bin/python -e ".[bench,train]" pytest lpips scikit-image imageio tqdm torchvision
-.venv/bin/python -m pytest -q          # 188 tests, needs an Apple GPU
+.venv/bin/python -m pytest -q          # needs an Apple GPU
 ```
 
 The `metal` job in `.github/workflows/checks.yml` is opt-in during its initial
