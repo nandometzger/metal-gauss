@@ -29,6 +29,7 @@ from metal_gauss.schedule import (auto_budget, resolve_training_schedule)  # noq
 from metal_gauss.appearance import AppearanceModel
 from metal_gauss.mcmc import add_noise, grow, relocate
 from metal_gauss.mipfilter import apply_3d_filter, compute_3d_filter
+from metal_gauss.viewer import SplatBatch, TrainClock
 
 C0 = 0.28209479177387814
 
@@ -189,6 +190,24 @@ def make_optimizer(p: dict, lr_means0: float, *, lr_opac: float = 1e-2,
     return torch.optim.Adam(groups, eps=1e-15)
 
 
+def splat_batch(p: dict, active: int, sh_deg: int = 3, antialias: bool = False,
+                filter_3d=None) -> SplatBatch:
+    """The active splats with their activations applied, as training draws them.
+
+    Shared by `render_view` and the live viewer, so the preview cannot drift
+    from what the loss actually sees.
+    """
+    scales = torch.exp(p["log_scales"][:active])
+    opac = torch.sigmoid(p["logit_opac"][:active])
+    if filter_3d is not None:
+        # Mip-Splatting's 3D low-pass. Applied here rather than in the kernel
+        # because it is a plain reparameterisation of scale and opacity, so
+        # autograd carries it and no adjoint has to be written.
+        scales, opac = apply_3d_filter(scales, opac, filter_3d[:active])
+    return SplatBatch(p["means"][:active], p["quats"][:active], scales, opac,
+                      p["sh_dc"][:active], p["sh_rest"][:active], sh_deg, antialias)
+
+
 def render_view(p: dict, v, active: int, sh_deg: int = 3,
                 background=(0.0, 0.0, 0.0), antialias: bool = False,
                 absgrad_out=None, filter_3d=None):
@@ -198,18 +217,11 @@ def render_view(p: dict, v, active: int, sh_deg: int = 3,
     and passing MPS tensors makes every call drain the queue.
     """
     H, W = v.image.shape[:2]
-    scales = torch.exp(p["log_scales"][:active])
-    opac = torch.sigmoid(p["logit_opac"][:active])
-    if filter_3d is not None:
-        # Mip-Splatting's 3D low-pass. Applied here rather than in the kernel
-        # because it is a plain reparameterisation of scale and opacity, so
-        # autograd carries it and no adjoint has to be written.
-        scales, opac = apply_3d_filter(scales, opac, filter_3d[:active])
+    b = splat_batch(p, active, sh_deg, antialias, filter_3d)
     return render(
-        p["means"][:active], p["quats"][:active],
-        scales, opac, p["sh_dc"][:active],
+        b.means, b.quats, b.scales, b.opacities, b.sh,
         v.K, v.viewmat, W, H,
-        sh_degree=sh_deg, backend="metal", sh_rest=p["sh_rest"][:active],
+        sh_degree=sh_deg, backend="metal", sh_rest=b.sh_rest,
         background=background, antialias=antialias, absgrad_out=absgrad_out)
 
 
@@ -278,7 +290,19 @@ def train(args) -> dict:
     rng = np.random.default_rng(0)
     order = rng.permutation(len(scene.train))
     oi = 0
-    t0 = time.perf_counter()
+
+    live = None
+    if args.viewer:
+        from metal_gauss.viewer import TrainingView, import_viser
+        # The closure reads active, sh_deg and filter_3d when called, which is
+        # after the step that last changed them.
+        live = TrainingView(
+            import_viser(), scene,
+            lambda: splat_batch(p, active, sh_deg, args.antialias, filter_3d),
+            background=bg, host=args.viewer_host, port=args.viewer_port,
+            budget=args.viewer_budget)
+
+    clock = TrainClock()
     log = []
 
     # Capacity ramp: start small (cheap early steps) and grow to the cap by
@@ -305,6 +329,7 @@ def train(args) -> dict:
     step_times: list[float] = []
     for step in range(1, args.steps + 1):
         t_step = time.perf_counter()
+        paused_before = clock.paused_s
         if oi >= len(order):
             order = rng.permutation(len(scene.train))
             oi = 0
@@ -414,6 +439,10 @@ def train(args) -> dict:
             if densify_now:
                 grad_sum.zero_(); grad_hits.zero_()
 
+        if live is not None:
+            live.after_step(step, active, loss, clock)
+            live.hold(clock)
+
         # MPS driver-side allocations grow without bound if the queue never
         # drains: a 10k-step run died at ~25GB of "other allocations" before
         # the first eval. Sync + drain periodically; costs ~ms, saves the run.
@@ -434,7 +463,7 @@ def train(args) -> dict:
         # ambiguity already produced one confidently wrong diagnosis.
         # Long unattended runs should go under `caffeinate -i`.
         if step > 20:
-            dt_step = time.perf_counter() - t_step
+            dt_step = time.perf_counter() - t_step - (clock.paused_s - paused_before)
             step_times.append(dt_step)
             if len(step_times) > 50:
                 step_times.pop(0)
@@ -446,7 +475,7 @@ def train(args) -> dict:
                       f"Reduce --budget or --max-resolution.", flush=True)
 
         if step == 100 or step % 500 == 0 and step % args.eval_every != 0:
-            dt = time.perf_counter() - t0
+            dt = clock.elapsed()
             print(f"step {step:>6}  loss {loss.item():.4f}  ({1000 * dt / step:.0f} ms/step)",
                   flush=True)
         if args.export and args.export_every and step % args.export_every == 0:
@@ -458,17 +487,23 @@ def train(args) -> dict:
 
         if step % args.eval_every == 0 or step == args.steps:
             torch.mps.empty_cache()
+            if live is not None:
+                live.set_status("evaluating held-out views")
             psnr = evaluate(p, scene, device, sh_degree=sh_deg, active=active,
                             background=bg, antialias=args.antialias,
                             filter_3d=filter_3d)
-            dt = time.perf_counter() - t0
+            if live is not None:
+                live.set_psnr(psnr)
+            dt = clock.elapsed()
             print(f"step {step:>6}  loss {loss.item():.4f}  heldout PSNR {psnr:.2f} dB  "
                   f"{active/1000:.0f}k splats  {dt:.0f}s  ({1000 * dt / step:.0f} ms/step)",
                   flush=True)
             log.append({"step": step, "psnr": psnr, "wall_s": round(dt, 1),
                         "active": active})
 
-    out = _run_report(args, log, time.perf_counter() - t0, active)
+    out = _run_report(args, log, clock.elapsed(), active,
+                      preview_s=live.preview_s if live is not None else 0.0,
+                      paused_s=clock.paused_s)
     for dest in (args.out, getattr(args, "report", None)):
         if dest:
             Path(dest).parent.mkdir(parents=True, exist_ok=True)
@@ -477,6 +512,10 @@ def train(args) -> dict:
         export_ply({k: (v[:active] if torch.is_tensor(v) else v) for k, v in p.items()},
                    args.export, filter_3d=filter_3d)
         print(f"exported {args.export}")
+    if live is not None:
+        print("training finished; the viewer keeps serving the final model until Ctrl-C",
+              flush=True)
+        live.finish()
     return out
 
 
@@ -555,7 +594,7 @@ def export_ply(p, path: str, filter_3d=None) -> None:
     plyfile.PlyData([plyfile.PlyElement.describe(data, "vertex")]).write(path)
 
 
-def _run_report(args, log, wall_s, active):
+def _run_report(args, log, wall_s, active, preview_s: float = 0.0, paused_s: float = 0.0):
     """Everything needed to reproduce this run, recorded by the process that ran it.
 
     Records ALL of vars(args), not a curated subset. Curation is how knobs go
@@ -601,6 +640,9 @@ def _run_report(args, log, wall_s, active):
             "wall_s": round(wall_s, 1),
             "n_splats": int(active),
             "ms_per_step": round(ms, 2) if ms else None,
+            # Both excluded from wall_s; recorded so a viewer run shows its cost.
+            "preview_s": round(preview_s, 3),
+            "paused_s": round(paused_s, 3),
         },
         # kept at the old top-level keys so existing readers of --out still work
         "steps": args.steps,
@@ -699,6 +741,16 @@ def main():
     ap.add_argument("--fused-adam", action="store_true", default=True,
                     help="Adam in one Metal pass instead of torch's five (2.2x)")
     ap.add_argument("--no-fused-adam", dest="fused_adam", action="store_false")
+    ap.add_argument("--viewer", action="store_true",
+                    help="watch training live in the browser (needs the [viewer] "
+                         "extra). The benchmark harness refuses such runs: preview "
+                         "renders share the GPU with training.")
+    ap.add_argument("--viewer-host", default="127.0.0.1",
+                    help="0.0.0.0 serves the preview to the network")
+    ap.add_argument("--viewer-port", type=int, default=8080)
+    ap.add_argument("--viewer-budget", type=float, default=0.10,
+                    help="largest share of wall-clock the preview may take while "
+                         "training runs; adjustable in the browser")
     ap.add_argument("--out", default=None)
     ap.add_argument("--report", default=None,
                     help="write the resolved config, env and metrics as JSON. "
@@ -713,6 +765,9 @@ def main():
     args = ap.parse_args()
     if not args.blender and not (args.colmap and args.images):
         ap.error("need --blender, or --colmap with --images")
+    if args.viewer:
+        from metal_gauss.viewer import import_viser
+        import_viser()                  # before a scene load, not after it
     budget_was_auto = args.budget is None
     try:
         resolved = resolve_training_schedule(

@@ -16,12 +16,14 @@ import sys
 import pytest
 import torch
 
-from metal_gauss.render_path import _GL2CV, intrinsics, render_frames
+from metal_gauss.render_path import _GL2CV, intrinsics, look_at, render_frames, world_to_camera
 from metal_gauss.viewer import (
     PreviewBudget,
     RenderScheduler,
+    TrainClock,
     frame_size,
     import_viser,
+    infer_up,
     intrinsics_vfov,
     pose_to_viewmat,
     quat_to_matrix,
@@ -247,6 +249,46 @@ def test_the_budget_follows_its_slider():
     assert not b.allow(0.1)
     b.fraction = 0.5
     assert b.allow(0.1)
+
+
+# ---------------------------------------------------------------- training
+
+def test_paused_time_is_not_training_time():
+    """Wall-clock, ms/step and the stall detector must not count a pause."""
+    t = [0.0]
+    clock = TrainClock(lambda: t[0])
+    t[0] = 10.0
+    assert clock.elapsed() == 10.0
+    clock.pause()
+    t[0] = 25.0
+    assert clock.elapsed() == 10.0
+    clock.pause()                            # a second pause changes nothing
+    t[0] = 30.0
+    clock.resume()
+    assert clock.paused_s == 20.0
+    t[0] = 31.0
+    assert clock.elapsed() == 11.0
+    clock.resume()                           # nor does a second resume
+    assert clock.paused_s == 20.0
+
+
+def test_a_z_up_rig_infers_z_up():
+    """Blender cameras ring the object looking down at it; their ups lean inward
+    and the horizontal parts cancel."""
+    views = []
+    for k in range(8):
+        a = 2.0 * math.pi * k / 8
+        eye = torch.tensor([3.0 * math.cos(a), 3.0 * math.sin(a), 1.5])
+        views.append(world_to_camera(look_at(eye, torch.zeros(3), up="+z"), eye))
+    assert torch.allclose(infer_up(views), torch.tensor([0.0, 0.0, 1.0]), atol=1e-6)
+
+
+def test_up_is_the_normalised_mean_of_the_camera_ups():
+    front_z_up = torch.tensor([0.0, -2.0, 0.0])
+    front_y_up = torch.tensor([0.0, 0.0, -2.0])
+    views = [world_to_camera(look_at(front_z_up, torch.zeros(3), up="+z"), front_z_up),
+             world_to_camera(look_at(front_y_up, torch.zeros(3), up="+y"), front_y_up)]
+    assert torch.allclose(infer_up(views), torch.tensor([0.0, S, S]), atol=1e-6)
 
 
 def test_missing_viser_names_the_extra(monkeypatch):
