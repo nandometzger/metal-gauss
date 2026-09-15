@@ -177,7 +177,11 @@ metal-gauss-train --blender data/nerf_synthetic/lego --steps 7000 --viewer
 The same page shows the model while it trains. It opens on the first training camera, with the up
 direction taken from the cameras themselves. It is rendered between optimisation steps, on the
 training thread, and may take at most `--viewer-budget` of wall-clock (10% by default, adjustable
-from the page). With no browser connected it costs nothing.
+from the page). The budget also pays for the GPU syncs the preview forces.
+
+On lego, 2000 steps, in interleaved runs:
+- **No browser connected:** no measurable cost (−1.2%, against 3.4% run-to-run noise).
+- **One browser connected:** +5.4% ms/step on means and +8.6% on medians, against about 10% noise.
 
 - **Training panel:** step, loss, held-out PSNR, and the preview's share of wall-clock. **Pause**
   gives the preview the whole GPU, lens included; paused time is left out of every reported time.
