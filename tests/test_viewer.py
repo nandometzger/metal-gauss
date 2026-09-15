@@ -357,6 +357,47 @@ def test_only_frames_taken_from_running_training_count_as_preview_time(monkeypat
     assert live.preview_s > 0.0
 
 
+def test_the_sync_a_frame_forces_is_charged_to_the_budget(monkeypatch):
+    """Measured: frames alone were 9% of wall-clock, training 17% slower.
+
+    The flush before a frame stalls the trainer's CPU/GPU pipelining, so the
+    budget pays for it. The adaptive preview scale still sees render time only.
+    """
+    import time as _time
+
+    from metal_gauss import viewer as V
+
+    live, client = _fake_live(monkeypatch)
+    monkeypatch.setattr(V.torch.mps, "synchronize", lambda: _time.sleep(0.03))
+    render_times = []
+    real_done = client.scheduler.done
+    monkeypatch.setattr(client.scheduler, "done",
+                        lambda job, s: (render_times.append(s), real_done(job, s)))
+    budget = PreviewBudget(1.0)
+    assert live.pump(max_jobs=1, budget=budget) == 1
+    assert live.preview_s >= 0.03
+    assert sum(s for _, s in budget._frames) >= 0.03
+    assert render_times and render_times[0] < 0.03
+
+
+def test_reading_the_loss_is_charged_to_the_budget(monkeypatch):
+    """loss.item() synchronises too; it happens only because a browser watches."""
+    import time as _time
+    from types import SimpleNamespace as NS
+
+    live, _ = _fake_live(monkeypatch, "TrainingView")
+    live.budget = PreviewBudget(1.0)
+    live._stats, live.stats = {}, NS(content="")
+    live._loss_at = live._stats_at = -math.inf
+    monkeypatch.setattr(live, "invalidate_all", lambda: None)
+    monkeypatch.setattr(live, "pump", lambda **kw: 0)
+    slow_loss = NS(item=lambda: (_time.sleep(0.03), 0.5)[1])
+    live.after_step(10, 5, slow_loss, TrainClock())
+    assert live._stats["loss"] == 0.5
+    assert live.preview_s >= 0.03
+    assert sum(s for _, s in live.budget._frames) >= 0.03
+
+
 def test_finishing_releases_a_pause_that_arrived_too_late(monkeypatch):
     """Pause clicked after the last step must not leave a live 'Resume' button."""
     from types import SimpleNamespace as NS

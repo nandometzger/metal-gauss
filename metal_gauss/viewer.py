@@ -669,8 +669,11 @@ class LiveView:
                     job = None if pose is None else client.scheduler.next_job(now, samples)
                 if job is None:
                     continue
+                synced = 0.0
                 if batch is None:
+                    t_sync = time.perf_counter()
                     torch.mps.synchronize()
+                    synced = time.perf_counter() - t_sync
                     batch = self.source()
                 t0 = time.perf_counter()
                 try:
@@ -688,9 +691,12 @@ class LiveView:
                     client.scheduler.done(job, seconds)
                 if budget is not None:
                     # Only budgeted frames took time from running training;
-                    # paused and finished renders cost the trainer nothing.
-                    budget.spend(time.monotonic(), seconds)
-                    self.preview_s += seconds
+                    # paused and finished renders cost the trainer nothing. The
+                    # flush before the frame is charged too: it stalls the
+                    # trainer's CPU/GPU pipelining. Measured without it, frames
+                    # were 9% of wall-clock while training ran 17% slower.
+                    budget.spend(time.monotonic(), seconds + synced)
+                    self.preview_s += seconds + synced
                 rendered += 1
                 self._report(job, W, H, seconds, len(batch))
         return rendered
@@ -960,7 +966,12 @@ class TrainingView(LiveView):
             return
         now = time.monotonic()
         if now - self._loss_at >= self.LOSS_EVERY_S:
+            t_loss = time.perf_counter()
             self._stats["loss"] = float(loss.item())
+            waited = time.perf_counter() - t_loss
+            # A sync that happens only because a browser is watching.
+            self.budget.spend(now, waited)
+            self.preview_s += waited
             self._loss_at = now
         if now - self._stats_at >= self.STATS_EVERY_S:
             elapsed = clock.elapsed()
