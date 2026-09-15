@@ -146,6 +146,28 @@ frames of it; `--convention opengl` if it comes out flipped. A monocular predict
 evidence for what the photograph saw, so past roughly **8°** the sweep starts showing invented
 surface. That is why the default sweep is small.
 
+## 👀 View
+
+```bash
+pip install "metal-gauss[viewer] @ git+https://github.com/nandometzger/metal-gauss"
+metal-gauss-view scene.ply --up +z
+```
+
+Open `http://127.0.0.1:8080`, drag to orbit and scroll to dolly. Every view is rendered on the Mac's
+GPU and sent to the browser tab as an image, so the browser does no splatting of its own and the
+viewer shows exactly what `metal-gauss-render` would. While the camera moves, a frame too slow for
+30 fps is rendered at a lower resolution. Once the camera stops, it gets one full-resolution frame,
+and after that nothing, so an idle viewer leaves the GPU alone.
+
+The Lens panel is the same thin lens as `--aperture`. It refines while the camera is still, showing
+the running mean at 8, 16, 32 and 64 samples and then at all of them. `--up`, `--convention`, `--fov`
+and `--background` mean what they do for `metal-gauss-render`.
+
+The server listens on localhost only. To view from another machine, tunnel it
+(`ssh -L 8080:127.0.0.1:8080 your-mac`) or pass `--host 0.0.0.0` to serve it to the network.
+[viser](https://github.com/nerfstudio-project/viser) is an optional extra, so the base install
+does not pull it in.
+
 ## ⚠️ Caveats
 
 - msplat is **1.3–1.8× faster per step**. Our fixed startup at that end was ~8.4 s and is now
