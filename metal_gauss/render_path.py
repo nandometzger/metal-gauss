@@ -241,7 +241,9 @@ def aperture_views(eye, target, radius: float, samples: int, up: str = "-y",
 
 
 def bbox_framing(means: torch.Tensor, fov_deg: float, margin: float = 1.25,
-                 quantile: float = 0.98, up: str = "-y") -> tuple[torch.Tensor, torch.Tensor]:
+                 quantile: float = 0.98, up: str = "-y",
+                 opacities: torch.Tensor | None = None, min_opacity: float = 0.1,
+                 min_splats: int = 256) -> tuple[torch.Tensor, torch.Tensor]:
     """(eye, target) for a .ply that did not come from a monocular predictor.
 
     A trained scene sits around its own origin with no input camera to anchor
@@ -251,8 +253,20 @@ def bbox_framing(means: torch.Tensor, fov_deg: float, margin: float = 1.25,
     The camera sits level with the target, back along -Z when Y is vertical and
     along -Y when Z is, which is Blender's front view. Always backing off along
     -Z put a Z-up scene's camera underneath it, looking up.
+
+    `opacities` keeps the framing off a short run's floater haze. That halo is
+    thousands of near-transparent splats spread far wider than the model, so a
+    percentile over all of them backs the camera off until the subject is a
+    small rectangle in the middle of the frame. It is faint and the model is
+    not, so anything under `min_opacity` is ignored -- unless too little is
+    left, since a file whose opacities are all low still has to be framed on
+    something.
     """
     _down(up)
+    if opacities is not None:
+        solid = opacities >= min_opacity
+        if int(solid.sum()) >= min_splats:
+            means = means[solid]
     lo = means.quantile(1.0 - quantile, dim=0)
     hi = means.quantile(quantile, dim=0)
     target = 0.5 * (lo + hi)
@@ -359,7 +373,8 @@ def fov_from_photo(path: str | Path) -> tuple[float, float]:
 
 def frame_cloud(means: torch.Tensor, frame: str = "auto", up: str = "-y",
                 convention: str = "opencv", fov: float | None = None,
-                like_photo: str | None = None, depth: float | None = None):
+                like_photo: str | None = None, depth: float | None = None,
+                opacities: torch.Tensor | None = None):
     """(frame_mode, fov, eye, target): where the camera goes, in OpenCV world axes.
 
     With `convention="opengl"` the renderer applies _GL2CV to the world, so the
@@ -405,7 +420,7 @@ def frame_cloud(means: torch.Tensor, frame: str = "auto", up: str = "-y",
         eye, target = torch.zeros(3), torch.tensor([0.0, 0.0, float(depth)])
     else:
         fov = fov if fov is not None else 45.0
-        eye, target = bbox_framing(means, fov, up=up)
+        eye, target = bbox_framing(means, fov, up=up, opacities=opacities)
     return frame_mode, fov, eye, target
 
 # --------------------------------------------------------------- rendering
@@ -551,7 +566,8 @@ def main(argv: list[str] | None = None) -> int:
     print(f"{len(sp)} splats, SH degree {sp.sh_degree}", file=sys.stderr)
 
     frame_mode, fov, eye, target = frame_cloud(
-        means_cpu, a.frame, a.up, a.convention, a.fov, a.like_photo, a.depth)
+        means_cpu, a.frame, a.up, a.convention, a.fov, a.like_photo, a.depth,
+        opacities=sp.opacities.detach().cpu())
 
     W = H = a.resolution
     K = intrinsics(W, H, fov)

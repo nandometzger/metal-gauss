@@ -1086,7 +1086,8 @@ def main(argv: list[str] | None = None) -> int:
     sp = load_ply(a.ply, device="mps")
     print(f"{len(sp):,} splats, SH degree {sp.sh_degree}", file=sys.stderr)
     means = sp.means.detach().cpu()
-    _, fov_h, eye, target = frame_cloud(means, "auto", a.up, a.convention, a.fov)
+    _, fov_h, eye, target = frame_cloud(means, "auto", a.up, a.convention, a.fov,
+                                        opacities=sp.opacities.detach().cpu())
     batch = SplatBatch.from_splats(sp)
     LiveView(viser, lambda: batch, eye=eye, target=target, up=a.up,
              background=(1.0, 1.0, 1.0) if a.background == "white" else (0.0, 0.0, 0.0),
