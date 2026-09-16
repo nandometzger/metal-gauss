@@ -624,6 +624,33 @@ def export_ply(p, path: str, filter_3d=None) -> None:
     plyfile.PlyData([plyfile.PlyElement.describe(data, "vertex")]).write(path)
 
 
+def _git_checkout_root(source: Path) -> Path | None:
+    """The checkout that holds `source`, or None if git only encloses it.
+
+    `pip install metal-gauss` into a .venv that lives inside another git
+    repository leaves the package sitting under that repository: git walks up
+    past the gitignored .venv and answers for it, so a report would record the
+    user's own project commit, and its dirty state, as the build that produced
+    the result. That is worse than recording nothing, because it looks right.
+
+    A checkout counts only if it holds THIS file at the path a checkout would,
+    which a site-packages copy never does. Reports from elsewhere record a null
+    revision and are identified by env.version instead.
+    """
+    try:
+        out = subprocess.run(("git", "rev-parse", "--show-toplevel"),
+                             cwd=source.resolve().parent, capture_output=True,
+                             text=True, timeout=5)
+        if out.returncode != 0:
+            return None
+        root = Path(out.stdout.strip()).resolve()
+        if (root / "metal_gauss" / source.name).resolve() == source.resolve():
+            return root
+    except Exception:
+        return None
+    return None
+
+
 def _run_report(args, log, wall_s, active, preview_s: float = 0.0, paused_s: float = 0.0):
     """Everything needed to reproduce this run, recorded by the process that ran it.
 
@@ -638,11 +665,14 @@ def _run_report(args, log, wall_s, active, preview_s: float = 0.0, paused_s: flo
     start_active clamping and the steps-scaler, so these are the values that
     actually ran, by construction rather than by convention.
     """
+    root = _git_checkout_root(Path(__file__))
+
     def _git(*a):
+        if root is None:
+            return None
         try:
-            return subprocess.run(("git",) + a, cwd=Path(__file__).resolve().parent,
-                                  capture_output=True, text=True,
-                                  timeout=5).stdout.strip()
+            return subprocess.run(("git",) + a, cwd=root, capture_output=True,
+                                  text=True, timeout=5).stdout.strip()
         except Exception:
             return None
 

@@ -359,6 +359,53 @@ def test_run_report_records_preview_and_paused_time():
     assert out["metrics"]["paused_s"] == 3.0
 
 
+def _repo(path, *, package_at):
+    """A real git repo at `path` with a one-file package at `package_at`."""
+    import subprocess
+
+    pkg = path / package_at
+    pkg.mkdir(parents=True)
+    (pkg / "train.py").write_text("# stand-in for metal_gauss/train.py\n")
+    (path / ".gitignore").write_text(".venv\n")
+    for cmd in (("init", "-q"), ("add", "."),
+                ("-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "init")):
+        subprocess.run(("git",) + cmd, cwd=path, check=True, capture_output=True)
+    return pkg / "train.py"
+
+
+def test_a_repository_that_merely_encloses_the_package_is_not_its_build(tmp_path):
+    """pip install into a .venv inside someone's project: git answers for THAT repo.
+
+    It walks up past the gitignored .venv and reports the user's own commit and
+    dirty state as the build that produced the result -- worse than recording
+    nothing, because it looks right.
+    """
+    from metal_gauss.train import _git_checkout_root
+
+    source = _repo(tmp_path / "someones-project",
+                   package_at=".venv/lib/site-packages/metal_gauss")
+    assert _git_checkout_root(source) is None
+
+
+def test_the_checkout_that_holds_the_package_is_its_build(tmp_path):
+    from metal_gauss.train import _git_checkout_root
+
+    root = tmp_path / "metal-gauss"
+    source = _repo(root, package_at="metal_gauss")
+    assert _git_checkout_root(source) == root.resolve()
+
+
+def test_a_run_from_this_checkout_still_records_its_commit():
+    """The normal case must keep working: this test suite runs from a checkout."""
+    import argparse
+
+    from metal_gauss.train import _run_report
+
+    env = _run_report(argparse.Namespace(steps=10, budget=100), [], 1.0, 100)["env"]
+    assert env["git"] and len(env["git"]) >= 7
+    assert isinstance(env["dirty"], bool)
+
+
 @mps
 def test_the_live_preview_renders_exactly_what_training_renders():
     """Same activations, same slice, same filter, same SH degree, same pixels."""
