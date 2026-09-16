@@ -21,12 +21,56 @@ float64. These kernels are never trusted on their own.
 from __future__ import annotations
 
 import math
+import sys
+import time
 from pathlib import Path
 
 import torch
 
 _HERE = Path(__file__).parent
 _ext = None
+
+# Longer than any build of this extension takes; past it, a lock is a leftover.
+_STALE_LOCK_S = 180.0
+
+
+def stale_lock_message(build_dir, now: float | None = None) -> str | None:
+    """What to say about a lock sitting in the extension's build directory.
+
+    torch's `load` waits on `<build_dir>/lock` with a bare
+    `while os.path.exists(lock): sleep(0.1)` and prints nothing, because it
+    builds its FileBaton without `warn_after_seconds`. A lock left behind by an
+    interrupted build therefore stops every later run forever, with no output
+    at all -- indistinguishable from a hung GPU until you sample the process
+    and find it asleep in `time_sleep`.
+
+    Nothing is deleted here. Two processes may legitimately build at once, and
+    deleting another one's lock would corrupt its build; saying what the file
+    is costs nothing and is what the wait itself never says.
+    """
+    try:
+        lock = Path(build_dir) / "lock"
+        age = (now if now is not None else time.time()) - lock.stat().st_mtime
+    except OSError:                      # no lock, or no build directory at all
+        return None
+    where = f"waiting for the kernel build lock at {lock} ({age:.0f}s old)"
+    if age < _STALE_LOCK_S:
+        return f"{where}; another process is probably compiling."
+    return (f"{where}. A build takes a minute or two, so this one is stale --"
+            f" left by an interrupted build. Delete it to carry on:\n"
+            f"    rm {lock}")
+
+
+def _warn_about_lock() -> None:
+    """Say what the wait inside torch's `load` never says. Never fatal."""
+    try:
+        from torch.utils.cpp_extension import _get_build_directory
+
+        message = stale_lock_message(_get_build_directory("metal_gauss_metal", False))
+    except Exception:                    # a private torch helper; not worth dying for
+        return
+    if message is not None:
+        print(f"metal-gauss: {message}", file=sys.stderr, flush=True)
 
 
 def _load():
@@ -46,6 +90,7 @@ def _load():
 
     from torch.utils.cpp_extension import load
 
+    _warn_about_lock()
     _ext = load(
         name="metal_gauss_metal",
         sources=[str(_HERE / "csrc" / "rasterize.mm")],
