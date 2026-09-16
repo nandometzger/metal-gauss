@@ -39,15 +39,18 @@ import time
 import traceback
 from collections import deque
 from collections.abc import Callable
+from pathlib import Path
 
 import torch
 
 from metal_gauss.api import render
 from metal_gauss.dataset import LazyViews
 from metal_gauss.io import Splats, load_ply
+from metal_gauss.keyframes import Keyframe, interpolate, preset
 from metal_gauss.schedule import format_duration
 from metal_gauss.render_path import (
     UP_AXES,
+    Mp4Writer,
     _GL2CV,
     aperture_views,
     frame_cloud,
@@ -455,6 +458,33 @@ def readout_text(seconds: float, splats: int, W: int, H: int, *, samples: int | 
     return " · ".join(parts)
 
 
+def export_plan(keys: list[Keyframe], frames: int, resolution: int, aspect: float,
+                world_flip: torch.Tensor | None = None,
+                loop: bool = True) -> list[tuple[torch.Tensor, torch.Tensor]]:
+    """One (view matrix, intrinsics) per frame of a video, planned up front.
+
+    Planned before anything is rendered so the writer knows its frame size and
+    the job can be handed out one frame at a time, however slowly they come.
+    """
+    W, H = frame_size(aspect, resolution, 1.0)
+    return [(pose_to_viewmat(k.wxyz, k.position, world_flip), intrinsics_vfov(W, H, k.fov))
+            for k in interpolate(keys, frames, loop)]
+
+
+@dataclasses.dataclass
+class _Export:
+    """A video being written, a frame per pump."""
+    plan: list[tuple[torch.Tensor, torch.Tensor]]
+    W: int
+    H: int
+    writer: object
+    out: str
+    radius: float
+    samples: int
+    focus: float
+    index: int = 0
+
+
 def import_viser():
     try:
         import viser
@@ -545,6 +575,9 @@ class LiveView:
         self.far = far
         self.clients: dict[int, _Client] = {}
         self.clients_lock = threading.Lock()
+        self._keys: list[Keyframe] = []
+        self._export: _Export | None = None
+        self.path_cancel = None
         self.wake = threading.Event()
         self.preview_s = 0.0
         self._rr = 0
@@ -580,7 +613,58 @@ class LiveView:
                 "Focus distance", min=0.05 * dist, max=4.0 * dist, step=0.005 * dist,
                 initial_value=dist, disabled=True)
             self.samples = gui.add_slider("Samples", min=8, max=128, step=8, initial_value=96)
+        with gui.add_folder("Path", order=0.5):
+            self.path_count = gui.add_markdown("no keyframes")
+            self.path_add = gui.add_button("Add keyframe")
+            self.path_clear = gui.add_button("Clear")
+            self.path_orbit = gui.add_button("Orbit preset")
+            self.path_wiggle = gui.add_button("Wiggle preset")
+            self.path_sweep = gui.add_slider("Preset sweep", min=2.0, max=180.0, step=1.0,
+                                             initial_value=20.0)
+            self.path_frames = gui.add_slider("Frames", min=12, max=600, step=6,
+                                              initial_value=60)
+            self.path_fps = gui.add_slider("Frames per second", min=6, max=60, step=6,
+                                           initial_value=30)
+            self.path_resolution = gui.add_slider("Video resolution", min=256, max=2048,
+                                                  step=16, initial_value=1024)
+            self.path_lens = gui.add_checkbox("Use the current aperture", initial_value=False)
+            self.path_out = gui.add_text("Output file", initial_value="path.mp4")
+            self.path_export = gui.add_button("Export")
+            self.path_cancel = gui.add_button("Cancel", disabled=True)
+            self.path_progress = gui.add_markdown("")
         self.status = gui.add_markdown("")
+
+        @self.path_add.on_click
+        def _(event) -> None:
+            camera = event.client.camera
+            self._keys.append(Keyframe(tuple(float(v) for v in camera.position),
+                                       tuple(float(v) for v in camera.wxyz),
+                                       float(camera.fov)))
+            self._show_keys()
+
+        @self.path_clear.on_click
+        def _(_) -> None:
+            self._keys.clear()
+            self._show_keys()
+
+        @self.path_orbit.on_click
+        def _(event) -> None:
+            self._preset("orbit", event.client)
+
+        @self.path_wiggle.on_click
+        def _(event) -> None:
+            self._preset("wiggle", event.client)
+
+        @self.path_export.on_click
+        def _(event) -> None:
+            self._start_export(event.client)
+
+        @self.path_cancel.on_click
+        def _(_) -> None:
+            export, self._export = self._export, None
+            if export is not None:
+                export.writer.abort()
+            self._finish_export("cancelled")
 
         for handle in (self.max_resolution, self.aperture, self.focus, self.samples):
             handle.on_update(lambda _: self.touch_all())
@@ -664,14 +748,30 @@ class LiveView:
         left queued is charged to the caller and not to the preview.
         """
         clients = self._clients()
-        if not clients:
+        export = self._export
+        if not clients and export is None:
             return 0
-        self._rr = (self._rr + 1) % len(clients)
-        clients = clients[self._rr:] + clients[:self._rr]
+        if clients:
+            self._rr = (self._rr + 1) % len(clients)
+            clients = clients[self._rr:] + clients[:self._rr]
         samples = int(self.samples.value) if lens and self.aperture.value > 0 else 0
         batch = None
         rendered = 0
         with torch.no_grad():                   # thread-local, so entered here
+            # The video first: it was asked for explicitly, and a preview frame
+            # is cheap to postpone.
+            if export is not None and (budget is None or budget.allow(time.monotonic())):
+                t_sync = time.perf_counter()
+                torch.mps.synchronize()
+                synced = time.perf_counter() - t_sync
+                batch = self.source()
+                t0 = time.perf_counter()
+                if self._export_frame(export, batch):
+                    seconds = time.perf_counter() - t0 + synced
+                    if budget is not None:
+                        budget.spend(time.monotonic(), seconds)
+                        self.preview_s += seconds
+                    rendered += 1
             for client in clients:
                 if max_jobs is not None and rendered >= max_jobs:
                     break
@@ -714,6 +814,110 @@ class LiveView:
                 rendered += 1
                 self._report(job, W, H, seconds, len(batch))
         return rendered
+
+    def _show_keys(self) -> None:
+        n = len(self._keys)
+        self.path_count.content = ("no keyframes" if n == 0 else
+                                   "1 keyframe" if n == 1 else f"{n} keyframes")
+
+    def _preset(self, kind: str, client) -> None:
+        """Fill the path with an orbit or wiggle around what this browser sees.
+
+        Keyframes stay in the browser's world, which is already the OpenCV one
+        the paths are drawn in; an OpenGL file's flip belongs at the end, in
+        `export_plan`, exactly where a single rendered frame applies it.
+        """
+        camera = client.camera
+        self._keys = preset(kind,
+                            torch.tensor(tuple(float(v) for v in camera.position)),
+                            torch.tensor(tuple(float(v) for v in camera.look_at)),
+                            frames=12, sweep_deg=float(self.path_sweep.value),
+                            fov=float(camera.fov))
+        self._show_keys()
+
+    def _start_export(self, client) -> None:
+        if self._export is not None:
+            self.path_progress.content = "already exporting; cancel it first"
+            return
+        keys = list(self._keys)              # another browser may be adding to it
+        if not keys:
+            self.path_progress.content = "add a keyframe first, or pick a preset"
+            return
+        aspect = float(client.camera.aspect)
+        resolution = int(self.path_resolution.value)
+        W, H = frame_size(aspect, resolution, 1.0)
+        out = str(self.path_out.value) or "path.mp4"
+        try:
+            writer = Mp4Writer(Path(out), W, H, int(self.path_fps.value))
+        except RuntimeError as e:
+            self.path_progress.content = f"**{e}**"
+            return
+        radius = float(self.aperture.value) if self.path_lens.value else 0.0
+        focus = (math.dist(client.camera.look_at, client.camera.position)
+                 if self.auto_focus.value else float(self.focus.value))
+        self._export = _Export(
+            plan=export_plan(keys, int(self.path_frames.value), resolution, aspect,
+                             self.flip),
+            W=W, H=H, writer=writer, out=out, radius=radius,
+            samples=int(self.samples.value), focus=focus)
+        self.path_export.disabled = True
+        self.path_cancel.disabled = False
+        self.path_progress.content = f"frame 0/{len(self._export.plan)}"
+        self.wake.set()
+
+    def _export_frame(self, export: _Export, batch: SplatBatch) -> bool:
+        """Render and write the next frame of the video. True if one was written."""
+        try:
+            vm, K = export.plan[export.index]
+            views = ([vm] if export.radius <= 0.0 else
+                     self._lens_views(vm, export.focus, export.radius, export.samples))
+            acc = None
+            for view in views:
+                frame = render_view(batch, view, K, export.W, export.H,
+                                    self.background, self.far)
+                acc = frame if acc is None else acc + frame
+            export.writer.write((acc / len(views) * 255.0).round().to(torch.uint8).cpu())
+        except Exception as e:
+            # The Path panel, not the shared status line: a preview frame that
+            # succeeds right after would clear that one and the failure would
+            # never be read.
+            traceback.print_exc()
+            export.writer.abort()
+            self._finish_export(f"**export failed:** `{type(e).__name__}: {e}`")
+            return False
+
+        export.index += 1
+        self.path_progress.content = f"frame {export.index}/{len(export.plan)}"
+        if export.index >= len(export.plan):
+            try:
+                export.writer.close()
+            except Exception as e:
+                self._finish_export(f"**export failed:** `{type(e).__name__}: {e}`")
+                return True
+            self._finish_export(f"wrote {export.out}")
+        return True
+
+    def _finish_export(self, message: str | None) -> None:
+        self._export = None
+        if message is not None:
+            self.path_progress.content = message
+        if self.path_cancel is not None:
+            self.path_cancel.disabled = True
+            self.path_export.disabled = False
+
+    def _lens_views(self, vm: torch.Tensor, focus: float, radius: float,
+                    samples: int) -> list[torch.Tensor]:
+        """The aperture's views around a rendered view matrix, roll and all.
+
+        `render_path.lens_views` rebuilds each sample upright from an up axis,
+        which would straighten a path camera that banks; the plan's own
+        rotation is used instead.
+        """
+        cv = vm if self.flip is None else vm @ self.flip
+        R = cv[:3, :3].T
+        eye = -R @ cv[:3, 3]
+        views = aperture_views(eye, eye + R[:, 2] * focus, radius, samples, R0=R)
+        return views if self.flip is None else [v @ self.flip for v in views]
 
     def serve_forever(self) -> None:
         """Keep rendering on the calling thread until Ctrl-C, then stop the server."""

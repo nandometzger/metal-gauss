@@ -456,26 +456,72 @@ def render_defocused(sp: Splats, views: list[torch.Tensor], K: torch.Tensor,
     return acc / len(views)
 
 
-def _pipe_to_ffmpeg(frames, out: Path, W: int, H: int, tail: list[str],
-                    fps: int) -> None:
-    """Pipe raw RGB straight into ffmpeg.
+class Mp4Writer:
+    """Raw RGB streamed into ffmpeg, a frame at a time.
+
+    An object rather than a generator sink because the viewer produces frames
+    slowly -- one per pump, while training carries on between them -- and
+    cannot hold the whole path open inside a generator.
 
     No intermediate files and no new dependency: the package needs only torch,
-    numpy, plyfile and ninja, and this keeps it that way.
+    numpy, plyfile and ninja, and this keeps it that way. Failures are ordinary
+    exceptions, so a server can show them and carry on; `metal-gauss-render`
+    turns them back into a clean exit.
     """
-    cmd = ["ffmpeg", "-y", "-v", "error",
-           "-f", "rawvideo", "-pix_fmt", "rgb24", "-s", f"{W}x{H}",
-           "-framerate", str(fps), "-i", "-", *tail, str(out)]
+
+    def __init__(self, out: Path, W: int, H: int, fps: int,
+                 tail: list[str] | None = None) -> None:
+        self.out = Path(out)
+        # ffmpeg exits immediately on a missing folder, and the first write then
+        # fails with a bare broken pipe.
+        self.out.parent.mkdir(parents=True, exist_ok=True)
+        cmd = ["ffmpeg", "-y", "-v", "error",
+               "-f", "rawvideo", "-pix_fmt", "rgb24", "-s", f"{W}x{H}",
+               "-framerate", str(fps), "-i", "-",
+               *(tail if tail is not None else
+                 ["-c:v", "libx264", "-crf", "20", "-pix_fmt", "yuv420p",
+                  "-movflags", "+faststart"]), str(self.out)]
+        try:
+            self._proc = subprocess.Popen(cmd, stdin=subprocess.PIPE)
+        except FileNotFoundError as e:
+            raise RuntimeError(
+                "ffmpeg not found on PATH; needed to write the output.") from e
+
+    def write(self, frame) -> None:
+        """One (H,W,3) frame: a float tensor in [0,1], or uint8 already."""
+        if torch.is_tensor(frame):
+            if frame.dtype != torch.uint8:
+                frame = (frame * 255.0).round().to(torch.uint8)
+            frame = frame.cpu().numpy()
+        try:
+            self._proc.stdin.write(frame.tobytes())
+        except BrokenPipeError as e:
+            # ffmpeg is already gone; its own status says more than the pipe does.
+            raise RuntimeError(
+                f"ffmpeg stopped while writing {self.out} (exit {self._proc.wait()})") from e
+
+    def close(self) -> None:
+        self._proc.stdin.close()
+        if self._proc.wait() != 0:
+            raise RuntimeError("ffmpeg failed while writing the output.")
+
+    def abort(self) -> None:
+        """Give up and leave nothing behind: a partial mp4 is not a result."""
+        self._proc.kill()
+        self._proc.wait()
+        self.out.unlink(missing_ok=True)
+
+
+def _pipe_to_ffmpeg(frames, out: Path, W: int, H: int, tail: list[str],
+                    fps: int) -> None:
+    """Write every frame of `frames`, as the CLI does: fail means exit."""
     try:
-        proc = subprocess.Popen(cmd, stdin=subprocess.PIPE)
-    except FileNotFoundError:
-        raise SystemExit("ffmpeg not found on PATH; needed to write the output.")
-    assert proc.stdin is not None
-    for f in frames:
-        proc.stdin.write((f * 255.0).round().to(torch.uint8).cpu().numpy().tobytes())
-    proc.stdin.close()
-    if proc.wait() != 0:
-        raise SystemExit("ffmpeg failed while writing the output.")
+        writer = Mp4Writer(out, W, H, fps, tail)
+        for f in frames:
+            writer.write(f)
+        writer.close()
+    except RuntimeError as e:
+        raise SystemExit(str(e))
 
 
 def write_mp4(frames, out: Path, W: int, H: int, fps: int) -> None:

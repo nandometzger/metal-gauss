@@ -721,6 +721,136 @@ def test_opencv_lens_views_match_the_aperture_around_the_view():
         lens_views(vm, 2.0, 0.05, 8), aperture_views(eye, focal, 0.05, 8)))
 
 
+# ------------------------------------------------------------------ the writer
+
+class _FakeProc:
+    """Enough of subprocess.Popen to see what reaches ffmpeg."""
+
+    def __init__(self, returncode=0):
+        import io
+
+        self.stdin = io.BytesIO()
+        self.stdin.close = lambda: setattr(self, "closed", True)   # keep the bytes
+        self.closed = False
+        self.waited = False
+        self._returncode = returncode
+        self.killed = False
+
+    def wait(self):
+        self.waited = True
+        return self._returncode
+
+    def kill(self):
+        self.killed = True
+
+
+def _fake_popen(monkeypatch, proc):
+    import metal_gauss.render_path as rp
+
+    seen = {}
+    monkeypatch.setattr(rp.subprocess, "Popen",
+                        lambda cmd, stdin=None: (seen.update(cmd=cmd), proc)[1])
+    return seen
+
+
+def test_the_writer_streams_frames_as_they_arrive(monkeypatch, tmp_path):
+    """Frames are written one at a time, so a caller that produces them slowly
+    -- the viewer, one per pump -- need not hold them all."""
+    from metal_gauss.render_path import Mp4Writer
+
+    proc = _FakeProc()
+    seen = _fake_popen(monkeypatch, proc)
+    writer = Mp4Writer(tmp_path / "out.mp4", 4, 2, 30)
+
+    writer.write(torch.ones(2, 4, 3))
+    assert proc.stdin.getvalue() == b"\xff" * 24, "one frame of 4x2 white pixels"
+    writer.write(torch.zeros(2, 4, 3))
+    assert len(proc.stdin.getvalue()) == 48
+    writer.close()
+
+    assert proc.closed and proc.waited
+    assert "4x2" in seen["cmd"] and str(tmp_path / "out.mp4") in seen["cmd"]
+
+
+def test_the_writer_makes_the_folder_it_writes_into(monkeypatch, tmp_path):
+    """ffmpeg exits at once if the folder is missing, and the first write then
+    fails with a bare broken pipe. The CLI made its own folder; now everyone does."""
+    from metal_gauss.render_path import Mp4Writer
+
+    seen = _fake_popen(monkeypatch, _FakeProc())
+    Mp4Writer(tmp_path / "videos" / "out.mp4", 4, 2, 30)
+
+    assert (tmp_path / "videos").is_dir()
+    assert str(tmp_path / "videos" / "out.mp4") in seen["cmd"]
+
+
+def test_a_broken_pipe_is_reported_as_an_ffmpeg_failure(monkeypatch, tmp_path):
+    """Whatever ffmpeg choked on, "BrokenPipeError" tells a user nothing."""
+    from metal_gauss.render_path import Mp4Writer
+
+    proc = _FakeProc(returncode=1)
+
+    def explode(_):
+        raise BrokenPipeError(32, "Broken pipe")
+
+    proc.stdin.write = explode
+    _fake_popen(monkeypatch, proc)
+    writer = Mp4Writer(tmp_path / "out.mp4", 4, 2, 30)
+
+    with pytest.raises(RuntimeError, match="ffmpeg"):
+        writer.write(torch.ones(2, 4, 3))
+
+
+def test_the_writer_reports_a_failed_ffmpeg(monkeypatch, tmp_path):
+    from metal_gauss.render_path import Mp4Writer
+
+    _fake_popen(monkeypatch, _FakeProc(returncode=1))
+    writer = Mp4Writer(tmp_path / "out.mp4", 4, 2, 30)
+    with pytest.raises(RuntimeError, match="ffmpeg failed"):
+        writer.close()
+
+
+def test_a_missing_ffmpeg_is_catchable(monkeypatch, tmp_path):
+    """The CLI turns this into a clean exit; the viewer has to survive it, so it
+    must not be SystemExit on the way up."""
+    import metal_gauss.render_path as rp
+    from metal_gauss.render_path import Mp4Writer
+
+    def missing(cmd, stdin=None):
+        raise FileNotFoundError(cmd[0])
+
+    monkeypatch.setattr(rp.subprocess, "Popen", missing)
+    with pytest.raises(RuntimeError, match="ffmpeg not found"):
+        Mp4Writer(tmp_path / "out.mp4", 4, 2, 30)
+
+
+def test_aborting_takes_the_half_written_file_with_it(monkeypatch, tmp_path):
+    from metal_gauss.render_path import Mp4Writer
+
+    proc = _FakeProc()
+    _fake_popen(monkeypatch, proc)
+    out = tmp_path / "out.mp4"
+    writer = Mp4Writer(out, 4, 2, 30)
+    writer.write(torch.ones(2, 4, 3))
+    out.write_bytes(b"partial")
+
+    writer.abort()
+
+    assert proc.killed and not out.exists()
+
+
+def test_the_command_line_still_refuses_to_run_without_ffmpeg(monkeypatch, tmp_path):
+    """`metal-gauss-render` keeps its plain message and clean exit."""
+    import metal_gauss.render_path as rp
+
+    def missing(cmd, stdin=None):
+        raise FileNotFoundError(cmd[0])
+
+    monkeypatch.setattr(rp.subprocess, "Popen", missing)
+    with pytest.raises(SystemExit, match="ffmpeg"):
+        rp.write_mp4([torch.ones(2, 4, 3)], tmp_path / "out.mp4", 4, 2, 30)
+
+
 def test_input_framing_refuses_another_up_axis():
     """An input camera is OpenCV by construction, so its up is -y and nothing else."""
     with pytest.raises(SystemExit, match="--up"):
