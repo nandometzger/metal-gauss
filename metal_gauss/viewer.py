@@ -45,7 +45,7 @@ import torch
 
 from metal_gauss.api import render
 from metal_gauss.dataset import LazyViews
-from metal_gauss.io import Splats, load_ply
+from metal_gauss.io import Splats, load_ply, save_ply
 from metal_gauss.keyframes import Keyframe, interpolate, preset
 from metal_gauss.schedule import format_duration
 from metal_gauss.render_path import (
@@ -54,6 +54,7 @@ from metal_gauss.render_path import (
     _GL2CV,
     aperture_views,
     frame_cloud,
+    solid_means,
     world_to_camera,
 )
 
@@ -434,6 +435,44 @@ class SplatBatch:
     def __len__(self) -> int:
         return int(self.means.shape[0])
 
+    def to_splats(self) -> Splats:
+        """Back to a Splats, for writing a file. The bands are joined: the
+        trainer keeps the DC band separate for its own learning rate, a .ply
+        stores one SH tensor."""
+        sh = self.sh if self.sh_rest is None else torch.cat([self.sh, self.sh_rest], dim=1)
+        return Splats(self.means, self.quats, self.scales, self.opacities, sh,
+                      self.sh_degree)
+
+    def select(self, keep: torch.Tensor) -> "SplatBatch":
+        """The same splats behind one mask. Every tensor is sliced together, or
+        the rasteriser reads one splat's colour against another's position."""
+        return dataclasses.replace(
+            self, means=self.means[keep], quats=self.quats[keep],
+            scales=self.scales[keep], opacities=self.opacities[keep], sh=self.sh[keep],
+            sh_rest=None if self.sh_rest is None else self.sh_rest[keep])
+
+
+@dataclasses.dataclass(frozen=True)
+class CropBox:
+    """An oriented box: what to keep of a scene.
+
+    A trained scene carries junk outside what anyone wants to look at --
+    floaters, walls, and the haze a short run leaves behind. Rotating the box
+    matters because that junk is rarely axis-aligned: a capture walked around a
+    subject leaves a wall running at whatever angle the room happened to be.
+    """
+    position: tuple[float, float, float]
+    wxyz: tuple[float, float, float, float]
+    size: tuple[float, float, float]
+
+    def mask(self, means: torch.Tensor) -> torch.Tensor:
+        """True for the splats inside the box, in the box's own frame."""
+        R = quat_to_matrix(self.wxyz).to(means.device, means.dtype)
+        centre = torch.as_tensor(self.position, device=means.device, dtype=means.dtype)
+        half = torch.as_tensor(self.size, device=means.device, dtype=means.dtype) * 0.5
+        local = (means - centre) @ R          # R^T (p - c), written as a row-vector product
+        return (local.abs() <= half).all(dim=1)
+
 
 def render_view(batch: SplatBatch, viewmat: torch.Tensor, K: torch.Tensor, W: int, H: int,
                 background, far: float) -> torch.Tensor:
@@ -578,6 +617,7 @@ class LiveView:
         self._keys: list[Keyframe] = []
         self._export: _Export | None = None
         self.path_cancel = None
+        self.crop: CropBox | None = None
         self.wake = threading.Event()
         self.preview_s = 0.0
         self._rr = 0
@@ -632,7 +672,26 @@ class LiveView:
             self.path_export = gui.add_button("Export")
             self.path_cancel = gui.add_button("Cancel", disabled=True)
             self.path_progress = gui.add_markdown("")
+        with gui.add_folder("Crop", order=0.75):
+            self.crop_enable = gui.add_checkbox("Enable", initial_value=False)
+            self.crop_x = gui.add_slider("Size X", min=0.0, max=4.0 * dist,
+                                         step=dist / 200.0, initial_value=dist)
+            self.crop_y = gui.add_slider("Size Y", min=0.0, max=4.0 * dist,
+                                         step=dist / 200.0, initial_value=dist)
+            self.crop_z = gui.add_slider("Size Z", min=0.0, max=4.0 * dist,
+                                         step=dist / 200.0, initial_value=dist)
+            self.crop_fit = gui.add_button("Reset to scene")
+            self.crop_count = gui.add_markdown("")
+            self.crop_out = gui.add_text("Cropped file", initial_value="cropped.ply")
+            self.crop_save = gui.add_button("Export cropped .ply")
         self.status = gui.add_markdown("")
+
+        # The box hangs off the gizmo, so dragging one moves both.
+        self.crop_gizmo = self.server.scene.add_transform_controls(
+            "/crop", scale=0.4 * dist, position=target.numpy(), visible=False)
+        self.crop_node = self.server.scene.add_box(
+            "/crop/box", color=(80, 180, 255), dimensions=(dist, dist, dist),
+            opacity=0.25, visible=False)
 
         @self.path_add.on_click
         def _(event) -> None:
@@ -665,6 +724,26 @@ class LiveView:
             if export is not None:
                 export.writer.abort()
             self._finish_export(None, "cancelled")
+
+        self._crop_fit_wanted = False
+        self._crop_save_wanted: str | None = None
+        self._crop_kept: tuple[int, int] | None = None
+
+        for handle in (self.crop_enable, self.crop_x, self.crop_y, self.crop_z):
+            handle.on_update(lambda _: self._update_crop())
+        self.crop_gizmo.on_update(lambda _: self._update_crop())
+
+        @self.crop_fit.on_click
+        def _(_) -> None:
+            # Both of these read the splats, which live on the GPU; the render
+            # thread owns those, so the work is left for the next pump.
+            self._crop_fit_wanted = True
+            self.wake.set()
+
+        @self.crop_save.on_click
+        def _(_) -> None:
+            self._crop_save_wanted = str(self.crop_out.value) or "cropped.ply"
+            self.wake.set()
 
         for handle in (self.max_resolution, self.aperture, self.focus, self.samples):
             handle.on_update(lambda _: self.touch_all())
@@ -702,6 +781,69 @@ class LiveView:
             with self.clients_lock:
                 self.clients.pop(handle.client_id, None)
             self._connected()
+
+    def _cropped(self, batch: SplatBatch) -> SplatBatch:
+        """The batch the crop box keeps, or the batch itself when there is none.
+
+        Identity without a crop on purpose: the mask is a gather over every
+        splat, and a viewer that is not cropping should not pay for one.
+        """
+        crop = self.crop
+        if crop is None:
+            return batch
+        keep = crop.mask(batch.means)
+        out = batch.select(keep)
+        self._show_kept(len(out), len(batch))
+        return out
+
+    def _update_crop(self) -> None:
+        """Rebuild the box from the GUI and the gizmo, and redraw with it."""
+        size = (float(self.crop_x.value), float(self.crop_y.value),
+                float(self.crop_z.value))
+        self.crop_node.dimensions = size
+        on = bool(self.crop_enable.value)
+        self.crop_gizmo.visible = on
+        self.crop_node.visible = on
+        self.crop = CropBox(
+            position=tuple(float(v) for v in self.crop_gizmo.position),
+            wxyz=tuple(float(v) for v in self.crop_gizmo.wxyz),
+            size=size) if on else None
+        if not on:
+            self._crop_kept = None
+            self.crop_count.content = ""
+        self.touch_all()
+
+    def _fit_crop(self, batch: SplatBatch) -> None:
+        """Start from the scene itself: the box the framing would have used."""
+        means = solid_means(batch.means, batch.opacities)
+        lo = means.quantile(0.02, dim=0)
+        hi = means.quantile(0.98, dim=0)
+        centre, size = 0.5 * (lo + hi), (hi - lo)
+        self.crop_gizmo.wxyz = (1.0, 0.0, 0.0, 0.0)
+        self.crop_gizmo.position = centre.cpu().numpy()
+        for handle, extent in zip((self.crop_x, self.crop_y, self.crop_z), size.tolist()):
+            handle.value = min(max(extent, 0.0), handle.max)
+        self.crop_enable.value = True
+        # Setting a GUI value only runs its callbacks when the value actually
+        # changed, so the rebuild is asked for here rather than assumed.
+        self._update_crop()
+
+    def _save_crop(self, batch: SplatBatch, path: str) -> None:
+        kept = self._cropped(batch)
+        try:
+            save_ply(kept.to_splats(), Path(path))
+        except Exception as e:                       # a bad path, a full disk
+            traceback.print_exc()
+            self.crop_count.content = f"**export failed:** `{type(e).__name__}: {e}`"
+            return
+        self.crop_count.content = f"wrote {len(kept):,} splats to {path}"
+
+    def _show_kept(self, kept: int, total: int) -> None:
+        # Only when it changes: this runs on every pump, and each GUI update is
+        # a websocket message to every browser.
+        if self._crop_kept != (kept, total):
+            self._crop_kept = (kept, total)
+            self.crop_count.content = f"keeping {kept:,} of {total:,} splats"
 
     def _clients(self) -> list[_Client]:
         with self.clients_lock:
@@ -758,13 +900,25 @@ class LiveView:
         batch = None
         rendered = 0
         with torch.no_grad():                   # thread-local, so entered here
+            # Fitting the box and writing a cropped file both read the splats,
+            # so a button press leaves them here rather than touching the GPU
+            # from a viser thread.
+            if self._crop_fit_wanted or self._crop_save_wanted is not None:
+                raw = self.source()
+                if self._crop_fit_wanted:
+                    self._crop_fit_wanted = False
+                    self._fit_crop(raw)
+                path, self._crop_save_wanted = self._crop_save_wanted, None
+                if path is not None:
+                    self._save_crop(raw, path)
+
             # The video first: it was asked for explicitly, and a preview frame
             # is cheap to postpone.
             if export is not None and (budget is None or budget.allow(time.monotonic())):
                 t_sync = time.perf_counter()
                 torch.mps.synchronize()
                 synced = time.perf_counter() - t_sync
-                batch = self.source()
+                batch = self._cropped(self.source())
                 t0 = time.perf_counter()
                 if self._export_frame(export, batch):
                     seconds = time.perf_counter() - t0 + synced
@@ -788,7 +942,7 @@ class LiveView:
                     t_sync = time.perf_counter()
                     torch.mps.synchronize()
                     synced = time.perf_counter() - t_sync
-                    batch = self.source()
+                    batch = self._cropped(self.source())
                 t0 = time.perf_counter()
                 try:
                     W, H, image = self._frame(client, job, pose, samples, batch)

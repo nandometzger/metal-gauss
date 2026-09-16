@@ -42,6 +42,48 @@ class Splats:
                       self.opacities[idx], self.sh[idx], self.sh_degree)
 
 
+def save_ply(splats: Splats, path: str | Path) -> None:
+    """Write `splats` in the INRIA convention `load_ply` reads.
+
+    The inverse of the read: scales go back to logs and opacities back to
+    logits, because the file stores parameterised values. A viewer holds the
+    activated ones, so writing them straight out gives a file that loads as
+    fog rather than as an error.
+
+    `train.export_ply` writes the same layout from the trainer's own
+    pre-activation parameters; this is for everything downstream of them -- a
+    cropped scene from the viewer, or any Splats in hand.
+    """
+    import plyfile
+
+    n, bases = len(splats), int(splats.sh.shape[1])
+    per_channel = bases - 1
+    names = (["x", "y", "z"] + [f"f_dc_{i}" for i in range(3)]
+             + [f"f_rest_{i}" for i in range(3 * per_channel)] + ["opacity"]
+             + [f"scale_{i}" for i in range(3)] + [f"rot_{i}" for i in range(4)])
+    data = np.zeros(n, dtype=[(nm, "f4") for nm in names])
+
+    data["x"], data["y"], data["z"] = splats.means.detach().cpu().numpy().T
+    sh = splats.sh.detach().cpu().numpy()
+    for c in range(3):
+        data[f"f_dc_{c}"] = sh[:, 0, c]
+        for b in range(per_channel):
+            data[f"f_rest_{c * per_channel + b}"] = sh[:, b + 1, c]
+
+    # Clamped so a fully transparent or fully opaque splat stays finite.
+    opac = splats.opacities.detach().cpu().clamp(1e-6, 1.0 - 1e-6)
+    data["opacity"] = torch.log(opac / (1.0 - opac)).numpy()
+    scales = torch.log(splats.scales.detach().cpu().clamp_min(1e-12)).numpy()
+    for i in range(3):
+        data[f"scale_{i}"] = scales[:, i]
+    quats = splats.quats.detach().cpu().numpy()
+    for i in range(4):
+        data[f"rot_{i}"] = quats[:, i]
+
+    Path(path).parent.mkdir(parents=True, exist_ok=True)
+    plyfile.PlyData([plyfile.PlyElement.describe(data, "vertex")]).write(str(path))
+
+
 def load_ply(path: str | Path, device: str = "cpu", dtype=torch.float32) -> Splats:
     from plyfile import PlyData
 

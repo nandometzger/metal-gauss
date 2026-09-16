@@ -313,3 +313,69 @@ def test_f_rest_count_must_be_divisible_by_three(tmp_path):
 
     with pytest.raises(ValueError, match="whole number per channel"):
         load_ply(path)
+
+
+# ------------------------------------------------------------------- writing
+
+def _synthetic_splats(n=32, degree=3, seed=0):
+    g = torch.Generator().manual_seed(seed)
+    bases = (degree + 1) ** 2
+    return Splats(
+        means=torch.randn(n, 3, generator=g),
+        quats=torch.nn.functional.normalize(torch.randn(n, 4, generator=g), dim=1),
+        scales=torch.rand(n, 3, generator=g) * 0.1 + 1e-3,
+        opacities=torch.rand(n, generator=g),
+        sh=torch.randn(n, bases, 3, generator=g),
+        sh_degree=degree,
+    )
+
+
+@pytest.mark.parametrize("degree", [0, 3])
+def test_a_written_file_reads_back_as_the_same_splats(tmp_path, degree):
+    """The viewer holds activated values; the file stores log scales and logits.
+
+    A round trip is the only check that both conversions agree -- writing a
+    probability where the loader expects a logit gives a file that renders as
+    fog rather than an error.
+    """
+    from metal_gauss.io import save_ply
+
+    sp = _synthetic_splats(degree=degree)
+    save_ply(sp, tmp_path / "out.ply")
+    back = load_ply(tmp_path / "out.ply")
+
+    assert back.sh_degree == degree
+    assert torch.allclose(back.means, sp.means, atol=1e-6)
+    assert torch.allclose(back.quats, sp.quats, atol=1e-6)
+    assert torch.allclose(back.scales, sp.scales, rtol=1e-5, atol=1e-7)
+    assert torch.allclose(back.opacities, sp.opacities, atol=1e-5)
+    assert torch.allclose(back.sh, sp.sh, atol=1e-6)
+
+
+def test_a_fully_opaque_splat_survives_the_logit(tmp_path):
+    """logit(1) is not writable; clamping keeps 0 and 1 finite and close."""
+    from metal_gauss.io import save_ply
+
+    sp = _synthetic_splats(n=2)
+    sp.opacities[:] = torch.tensor([0.0, 1.0])
+    save_ply(sp, tmp_path / "edge.ply")
+    back = load_ply(tmp_path / "edge.ply")
+
+    assert torch.isfinite(back.opacities).all()
+    assert float(back.opacities[0]) < 1e-4
+    assert float(back.opacities[1]) > 1.0 - 1e-4
+
+
+def test_a_written_file_carries_the_fields_the_renderer_reads(tmp_path):
+    """Same names and the same channel-major SH as train.export_ply writes."""
+    from plyfile import PlyData
+
+    from metal_gauss.io import save_ply
+
+    save_ply(_synthetic_splats(), tmp_path / "fields.ply")
+    names = {p.name for p in PlyData.read(str(tmp_path / "fields.ply"))["vertex"].properties}
+    assert {"x", "y", "z", "opacity"} <= names
+    assert {f"scale_{i}" for i in range(3)} <= names
+    assert {f"rot_{i}" for i in range(4)} <= names
+    assert {f"f_dc_{i}" for i in range(3)} <= names
+    assert {f"f_rest_{i}" for i in range(45)} <= names
