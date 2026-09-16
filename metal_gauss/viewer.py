@@ -664,7 +664,7 @@ class LiveView:
             export, self._export = self._export, None
             if export is not None:
                 export.writer.abort()
-            self._finish_export("cancelled")
+            self._finish_export(None, "cancelled")
 
         for handle in (self.max_resolution, self.aperture, self.focus, self.samples):
             handle.on_update(lambda _: self.touch_all())
@@ -883,7 +883,7 @@ class LiveView:
             # never be read.
             traceback.print_exc()
             export.writer.abort()
-            self._finish_export(f"**export failed:** `{type(e).__name__}: {e}`")
+            self._finish_export(export, f"**export failed:** `{type(e).__name__}: {e}`")
             return False
 
         export.index += 1
@@ -892,12 +892,16 @@ class LiveView:
             try:
                 export.writer.close()
             except Exception as e:
-                self._finish_export(f"**export failed:** `{type(e).__name__}: {e}`")
+                self._finish_export(export, f"**export failed:** `{type(e).__name__}: {e}`")
                 return True
-            self._finish_export(f"wrote {export.out}")
+            self._finish_export(export, f"wrote {export.out}")
         return True
 
-    def _finish_export(self, message: str | None) -> None:
+    def _finish_export(self, export: "_Export | None", message: str | None) -> None:
+        # A cancelled export can still fail a frame on the render thread after
+        # the next one has started; its cleanup must not take the new one down.
+        if export is not None and self._export is not export:
+            return
         self._export = None
         if message is not None:
             self.path_progress.content = message
