@@ -163,10 +163,17 @@ The Lens panel is the same thin lens as `--aperture`. It refines while the camer
 the running mean at 8, 16, 32 and 64 samples and then at all of them. `--up`, `--convention`, `--fov`
 and `--background` mean what they do for `metal-gauss-render`.
 
+The Path panel flies a camera through the scene and writes an mp4. **Orbit** and **Wiggle** lay
+down keyframes around the current view; **Add keyframe** captures wherever you are, and the path
+runs smoothly through them and loops. Frames, fps and resolution are yours to set, and the current
+aperture can come along for a defocused video. Rendering happens here rather than in the browser,
+so the video comes out at full resolution with the depth of field intact.
+
 The server listens on localhost only. To view from another machine, tunnel it
 (`ssh -L 8080:127.0.0.1:8080 your-mac`) or pass `--host 0.0.0.0` to serve it to the network.
 [viser](https://github.com/nerfstudio-project/viser) is an optional extra, so the base install
-does not pull it in.
+does not pull it in. Keep the tab visible: a hidden one stops the browser's render loop, and the
+page goes blank until you come back to it.
 
 ### Watch it train
 
@@ -193,6 +200,10 @@ On lego, 2000 steps, in interleaved runs:
 - **Snapped view:** shows that camera's PSNR, and **Show photo** swaps the render for its
   photograph, pixel-aligned.
 - **When training ends,** the page keeps serving the final model until Ctrl-C.
+
+Exporting a video while training shares the same budget, so it renders slowly and the model keeps
+improving between frames — a progress flythrough rather than a turntable. Pause first for a
+consistent one, which also runs at full speed.
 
 `--viewer` is off by default. The benchmark harness refuses reports from runs that used it, because
 the preview shares the GPU.
