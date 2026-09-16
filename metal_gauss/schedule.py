@@ -73,6 +73,65 @@ def resolve_training_schedule(*, steps: int, steps_scaler: float,
     }
 
 
+def step_cost(step: int, *, steps: int, num_downscales: int, resolution_schedule: int,
+              grow: bool, start_active: int, budget: int, grow_until_frac: float) -> float:
+    """Relative cost of one training step: pixels times active splats.
+
+    Both factors are normalised to the end of the run, where the cost is 1.
+    They are the trainer's own curriculum: `--num-downscales` starts at
+    1/2^N resolution and doubles on `--resolution-schedule`, and `--grow` ramps
+    capacity from `--start-active` to `--budget` over the first
+    `--grow-until-frac` of the run.
+
+    A downscale level costs HALF the next one, not a quarter, even though it
+    has a quarter of the pixels. Measured on lego (600 steps, 30k splats), the
+    three levels ran at 13, 28 and 40 ms per step against pixel ratios of
+    1:4:16 -- a small frame is bound by dispatch, Adam and Python rather than
+    by pixels, so the cost tracks the side length. Scaling by pixels predicted
+    208 ms for a step that took 40, and a 2.8x too-long ETA.
+
+    Still an approximation: Adam runs over the whole budget rather than the
+    active slice, and the constant differs with splat count and resolution.
+    """
+    lvl = (max(0, num_downscales - step // max(1, resolution_schedule))
+           if num_downscales > 0 else 0)
+    pixels = 0.5 ** lvl
+    if grow and budget > 0:
+        grow_until = max(1, int(grow_until_frac * steps))
+        active = start_active + (budget - start_active) * min(1.0, step / grow_until)
+        return pixels * active / budget
+    return pixels
+
+
+def remaining_s(step: int, *, steps: int, recent_step_s: float, eval_every: int,
+                eval_s: float, **schedule) -> float | None:
+    """Seconds of training left, with the curriculum applied. None if not yet known.
+
+    Recent steps set the price of one unit of work and `step_cost` says how many
+    units are left, so the constant cancels and nothing needs calibrating. Evals
+    are added separately: a 200-view evaluation is not a step.
+    """
+    if recent_step_s <= 0.0:
+        return None
+    now = step_cost(step, steps=steps, **schedule)
+    if now <= 0.0:
+        return None
+    work = sum(step_cost(s, steps=steps, **schedule) for s in range(step + 1, steps + 1))
+    evals = len({s for s in range(step + 1, steps + 1)
+                 if (eval_every > 0 and s % eval_every == 0) or s == steps})
+    return recent_step_s * work / now + evals * eval_s
+
+
+def format_duration(seconds: float) -> str:
+    """A duration for a progress line: 45s, 3m 20s, 1h 04m."""
+    seconds = max(0, int(seconds))
+    if seconds < 60:
+        return f"{seconds}s"
+    if seconds < 3600:
+        return f"{seconds // 60}m {seconds % 60:02d}s"
+    return f"{seconds // 3600}h {seconds % 3600 // 60:02d}m"
+
+
 def auto_budget(steps: int) -> int:
     """Capacity that suits the step budget.
 
