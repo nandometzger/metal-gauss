@@ -660,6 +660,37 @@ def test_a_failed_export_frame_leaves_no_half_written_video(monkeypatch):
     assert live.pump(max_jobs=1) == 1
 
 
+def test_a_stale_export_finishing_does_not_cancel_the_next_one(monkeypatch):
+    """Cancel, start another, then the cancelled one's frame fails on the render thread.
+
+    Its cleanup used to clear whatever export was current, so the new video
+    stopped after one frame with the old one's error on the panel.
+    """
+    from types import SimpleNamespace as NS
+
+    from metal_gauss.viewer import _Export
+
+    live, _ = _fake_live(monkeypatch, "TrainingView")
+    live.path_progress = NS(content="")
+    live.path_export, live.path_cancel = NS(disabled=True), NS(disabled=False)
+
+    def _export(out):
+        return _Export(plan=[], W=16, H=16, writer=NS(abort=lambda: None), out=out,
+                       radius=0.0, samples=1, focus=1.0)
+
+    cancelled, current = _export("old.mp4"), _export("new.mp4")
+    live._export = current
+    live._finish_export(cancelled, "**export failed:** `BrokenPipeError`")
+
+    assert live._export is current
+    assert live.path_export.disabled and not live.path_cancel.disabled
+    assert "failed" not in live.path_progress.content
+
+    live._finish_export(current, f"wrote {current.out}")
+    assert live._export is None
+    assert live.path_progress.content == "wrote new.mp4"
+
+
 def test_missing_viser_names_the_extra(monkeypatch):
     monkeypatch.setitem(sys.modules, "viser", None)
     with pytest.raises(SystemExit, match=r"metal-gauss\[viewer\]"):
