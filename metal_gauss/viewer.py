@@ -45,6 +45,7 @@ import torch
 from metal_gauss.api import render
 from metal_gauss.dataset import LazyViews
 from metal_gauss.io import Splats, load_ply
+from metal_gauss.schedule import format_duration
 from metal_gauss.render_path import (
     UP_AXES,
     _GL2CV,
@@ -441,6 +442,19 @@ def render_view(batch: SplatBatch, viewmat: torch.Tensor, K: torch.Tensor, W: in
     return rgb.detach().clamp(0.0, 1.0)
 
 
+def readout_text(seconds: float, splats: int, W: int, H: int, *, samples: int | None = None,
+                 fps: float | None = None, gb: float | None = None) -> str:
+    """What the last frame cost, for the Render panel."""
+    parts = [f"{1000.0 * seconds:.1f} ms/frame", f"{splats:,} splats", f"{W}×{H}"]
+    if samples is not None:
+        parts.append(f"{samples} samples")
+    if fps is not None:
+        parts.append(f"{fps:.0f} fps")
+    if gb is not None:
+        parts.append(f"{gb:.1f} GB")
+    return " · ".join(parts)
+
+
 def import_viser():
     try:
         import viser
@@ -740,12 +754,11 @@ class LiveView:
         return W, H, image
 
     def _report(self, job: Job, W: int, H: int, seconds: float, splats: int) -> None:
-        text = f"{1000.0 * seconds:.1f} ms/frame · {splats:,} splats · {W}×{H}"
-        if job.lens is not None:
-            text += f" · {job.lens[1]} samples"
-        else:
-            text += f" · {1.0 / seconds:.0f} fps"
-        self.readout.content = text
+        self.readout.content = readout_text(
+            seconds, splats, W, H,
+            samples=job.lens[1] if job.lens is not None else None,
+            fps=None if job.lens is not None else 1.0 / seconds,
+            gb=torch.mps.driver_allocated_memory() / 1e9)
         if self.status.content:
             self.status.content = ""
 
@@ -1005,6 +1018,10 @@ class TrainingView(LiveView):
         self._stats["psnr"] = psnr
         self.set_status(None)
 
+    def set_eta(self, eta_s: float | None) -> None:
+        """Seconds the trainer thinks are left, or None while it cannot tell."""
+        self._stats["eta"] = eta_s
+
     def finish(self) -> None:
         """Training is over: keep showing the final model until Ctrl-C."""
         # A pause clicked after the last step was never held; release it.
@@ -1030,6 +1047,8 @@ class TrainingView(LiveView):
             parts.append(f"held-out {s['psnr']:.2f} dB")
         if parts:
             lines.append(" · ".join(parts))
+        if s.get("eta"):
+            lines.append(f"eta {format_duration(s['eta'])}")
         if "share" in s:
             lines.append(f"preview {s['share']:.0%} of wall-clock")
         if s.get("view"):

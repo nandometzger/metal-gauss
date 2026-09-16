@@ -25,7 +25,8 @@ import torch
 
 from metal_gauss import render
 from metal_gauss.dataset import Scene, downscaled, load_scene
-from metal_gauss.schedule import (auto_budget, resolve_training_schedule)  # noqa: F401
+from metal_gauss.schedule import (auto_budget, format_duration,  # noqa: F401
+                                  remaining_s, resolve_training_schedule)
 from metal_gauss.appearance import AppearanceModel
 from metal_gauss.mcmc import add_noise, grow, relocate
 from metal_gauss.mipfilter import apply_3d_filter, compute_3d_filter
@@ -190,6 +191,26 @@ def make_optimizer(p: dict, lr_means0: float, *, lr_opac: float = 1e-2,
     return torch.optim.Adam(groups, eps=1e-15)
 
 
+def _eta(step: int, args, step_times: list[float], eval_s: float) -> float | None:
+    """Seconds left, from the recent step times and the curriculum still to run.
+
+    The same window the stall detector keeps; a median, so one hiccup does not
+    move it. Nothing is reported until that window means something.
+    """
+    if len(step_times) < 10:
+        return None
+    return remaining_s(
+        step, steps=args.steps, recent_step_s=sorted(step_times)[len(step_times) // 2],
+        eval_every=args.eval_every, eval_s=eval_s, num_downscales=args.num_downscales,
+        resolution_schedule=args.resolution_schedule, grow=args.grow,
+        start_active=args.start_active, budget=args.budget,
+        grow_until_frac=args.grow_until_frac)
+
+
+def _eta_suffix(eta: float | None) -> str:
+    return f"  eta {format_duration(eta)}" if eta else ""
+
+
 def splat_batch(p: dict, active: int, sh_deg: int = 3, antialias: bool = False,
                 filter_3d=None) -> SplatBatch:
     """The active splats with their activations applied, as training draws them.
@@ -327,6 +348,7 @@ def train(args) -> dict:
     grad_hits = torch.zeros(args.budget, device=device)
 
     step_times: list[float] = []
+    eval_s = 0.0
     for step in range(1, args.steps + 1):
         t_step = time.perf_counter()
         paused_before = clock.paused_s
@@ -474,10 +496,14 @@ def train(args) -> dict:
                       f"swapping: {active:,} active gaussians at {W}x{H}. "
                       f"Reduce --budget or --max-resolution.", flush=True)
 
+        eta = _eta(step, args, step_times, eval_s)
+        if live is not None:
+            live.set_eta(eta)
+
         if step == 100 or step % 500 == 0 and step % args.eval_every != 0:
             dt = clock.elapsed()
-            print(f"step {step:>6}  loss {loss.item():.4f}  ({1000 * dt / step:.0f} ms/step)",
-                  flush=True)
+            print(f"step {step:>6}  loss {loss.item():.4f}  ({1000 * dt / step:.0f} ms/step)"
+                  f"{_eta_suffix(eta)}", flush=True)
         if args.export and args.export_every and step % args.export_every == 0:
             # written before the eval so the mtime reflects training time, not
             # training plus a 200-view evaluation
@@ -489,16 +515,19 @@ def train(args) -> dict:
             torch.mps.empty_cache()
             if live is not None:
                 live.set_status("evaluating held-out views")
+            t_eval = time.perf_counter()
             psnr = evaluate(p, scene, device, sh_degree=sh_deg, active=active,
                             background=bg, antialias=args.antialias,
                             filter_3d=filter_3d)
+            # An eval is 200 views, not a step; the ETA counts the ones to come.
+            eval_s = time.perf_counter() - t_eval
             if live is not None:
                 live.set_psnr(psnr)
                 live.heldout_ready()            # evaluate() just decoded that split
             dt = clock.elapsed()
             print(f"step {step:>6}  loss {loss.item():.4f}  heldout PSNR {psnr:.2f} dB  "
-                  f"{active/1000:.0f}k splats  {dt:.0f}s  ({1000 * dt / step:.0f} ms/step)",
-                  flush=True)
+                  f"{active/1000:.0f}k splats  {dt:.0f}s  ({1000 * dt / step:.0f} ms/step)"
+                  f"{_eta_suffix(_eta(step, args, step_times, eval_s))}", flush=True)
             log.append({"step": step, "psnr": psnr, "wall_s": round(dt, 1),
                         "active": active})
 

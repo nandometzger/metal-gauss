@@ -560,6 +560,16 @@ def test_stats_survive_a_snap_ending_on_another_thread(monkeypatch):
     assert "step 10" in live.stats.content
 
 
+def test_the_readout_reports_what_a_frame_cost():
+    """Frame time, splats, size, and the GPU memory behind them."""
+    from metal_gauss.viewer import readout_text
+
+    assert readout_text(0.02, 600_000, 1024, 576, fps=50.0, gb=3.25) == (
+        "20.0 ms/frame · 600,000 splats · 1024×576 · 50 fps · 3.2 GB")
+    assert readout_text(0.3, 1_000, 512, 512, samples=96) == (
+        "300.0 ms/frame · 1,000 splats · 512×512 · 96 samples")
+
+
 def test_missing_viser_names_the_extra(monkeypatch):
     monkeypatch.setitem(sys.modules, "viser", None)
     with pytest.raises(SystemExit, match=r"metal-gauss\[viewer\]"):
