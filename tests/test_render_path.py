@@ -410,6 +410,34 @@ def test_bbox_framing_puts_the_whole_cloud_in_frame():
         f"{uv.max(0).values.tolist()}"
 
 
+def test_faint_floaters_do_not_set_the_framing():
+    """A short run leaves a halo of near-transparent splats around the subject.
+
+    They are 2% of nothing to look at, but a quantile over every splat counts
+    them, and the subject ends up a small rectangle in the middle of the frame.
+    Opacity separates them: the haze is faint, the model is not.
+    """
+    g = torch.Generator().manual_seed(0)
+    cube = cube_cloud()
+    haze = torch.randn(4000, 3, generator=g) * 8.0
+    means = torch.cat([cube, haze])
+    opacities = torch.cat([torch.full((len(cube),), 0.9),
+                           torch.full((len(haze),), 0.02)])
+
+    eye, target = bbox_framing(means, 45.0, opacities=opacities)
+    want_eye, want_target = bbox_framing(cube, 45.0)
+    assert torch.allclose(eye, want_eye, atol=1e-5)
+    assert torch.allclose(target, want_target, atol=1e-5)
+
+
+def test_framing_keeps_every_splat_when_none_is_opaque():
+    """A .ply whose opacities are all low still has to be framed on something."""
+    cube = cube_cloud()
+    faint = torch.full((len(cube),), 0.01)
+    assert all(torch.allclose(a, b, atol=1e-6) for a, b in zip(
+        bbox_framing(cube, 45.0, opacities=faint), bbox_framing(cube, 45.0)))
+
+
 def test_bbox_framing_distance_tracks_fov_and_margin():
     """Wider lens, closer camera; more margin, further back.
 
