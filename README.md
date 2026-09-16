@@ -183,7 +183,10 @@ On lego, 2000 steps, in interleaved runs:
 - **No browser connected:** no measurable cost (−1.2%, against 3.4% run-to-run noise).
 - **One browser connected:** +5.4% ms/step on means and +8.6% on medians, against about 10% noise.
 
-- **Training panel:** step, loss, held-out PSNR, and the preview's share of wall-clock. **Pause**
+- **Training panel:** step, loss, held-out PSNR, an ETA, and the preview's share of wall-clock. The
+  ETA prices the curriculum that is left — the resolution schedule, the capacity ramp and the evals
+  still to come — so it does not read low early. It is in the terminal log too, with or without the
+  viewer. **Pause**
   gives the preview the whole GPU, lens included; paused time is left out of every reported time.
 - **Cameras:** the training cameras (blue) and held-out cameras (orange). Held-out cameras appear
   once that split has been loaded for evaluation. Click one to jump to it.
