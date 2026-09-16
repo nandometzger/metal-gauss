@@ -23,6 +23,7 @@ import numpy as np
 from metal_gauss.dataset import LazyViews
 from metal_gauss.render_path import _GL2CV, intrinsics, look_at, render_frames, world_to_camera
 from metal_gauss.viewer import (
+    CropBox,
     PreviewBudget,
     RenderScheduler,
     SnapState,
@@ -338,6 +339,9 @@ def _fake_live(monkeypatch, cls_name="LiveView"):
     live.background, live.far, live.flip = (1.0, 1.0, 1.0), 100.0, None
     live._export = None
     live.path_cancel = None                  # no Path folder behind this one
+    live.crop = None
+    live._crop_fit_wanted, live._crop_save_wanted, live._crop_kept = False, None, None
+    live.crop_count = NS(content="")
     client = V._Client(NS(scene=NS(set_background_image=lambda image, **kw: None)))
     client.pose = V._Pose((1.0, 0.0, 0.0, 0.0), (0.0, 0.0, 0.0), (0.0, 0.0, 1.0), 1.0, 1.0)
     live.clients = {1: client}
@@ -697,6 +701,108 @@ def test_missing_viser_names_the_extra(monkeypatch):
         import_viser()
 
 
+# ---------------------------------------------------------------- crop box
+
+def test_a_crop_box_keeps_what_is_inside_it():
+    """Half-open on neither side: a splat exactly on the face is kept."""
+    box = CropBox(position=(1.0, 0.0, 0.0), wxyz=(1.0, 0.0, 0.0, 0.0), size=(2.0, 2.0, 2.0))
+    means = torch.tensor([[1.0, 0.0, 0.0],      # centre
+                          [2.0, 1.0, 1.0],      # the corner, exactly on it
+                          [2.001, 0.0, 0.0],    # just past the +x face
+                          [-0.5, 0.0, 0.0]])    # outside
+    assert box.mask(means).tolist() == [True, True, False, False]
+
+
+def test_a_rotated_crop_box_is_not_an_axis_aligned_one():
+    """The point of an oriented box: junk in a tilted capture is not axis-aligned.
+
+    A slab 2 long and 0.5 thick, turned 45 degrees about Z, keeps what lies
+    along its own X and rejects what lies along the world's.
+    """
+    eighth = math.radians(45.0) / 2.0
+    box = CropBox(position=(0.0, 0.0, 0.0), size=(2.0, 0.5, 2.0),
+                  wxyz=(math.cos(eighth), 0.0, 0.0, math.sin(eighth)))
+    along_its_own_x = torch.tensor([[0.7, 0.7, 0.0]])
+    along_world_x = torch.tensor([[0.9, 0.0, 0.0]])
+    assert box.mask(along_its_own_x).tolist() == [True]
+    assert box.mask(along_world_x).tolist() == [False]
+
+    upright = CropBox(position=(0.0, 0.0, 0.0), wxyz=(1.0, 0.0, 0.0, 0.0), size=(2.0, 0.5, 2.0))
+    assert upright.mask(along_its_own_x).tolist() == [False]
+    assert upright.mask(along_world_x).tolist() == [True]
+
+
+def test_a_zero_size_box_keeps_nothing_and_a_huge_one_keeps_everything():
+    means = torch.randn(64, 3, generator=torch.Generator().manual_seed(0))
+    empty = CropBox((0.0, 0.0, 0.0), (1.0, 0.0, 0.0, 0.0), (0.0, 0.0, 0.0))
+    everything = CropBox((0.0, 0.0, 0.0), (1.0, 0.0, 0.0, 0.0), (1e6, 1e6, 1e6))
+    assert int(empty.mask(means).sum()) == 0
+    assert int(everything.mask(means).sum()) == len(means)
+
+
+def test_selecting_slices_every_tensor_together():
+    """One mask has to crop means, quats, scales, opacities and both SH bands."""
+    from metal_gauss.viewer import SplatBatch
+
+    n = 6
+    batch = SplatBatch(means=torch.arange(n * 3, dtype=torch.float32).reshape(n, 3),
+                       quats=torch.zeros(n, 4), scales=torch.ones(n, 3),
+                       opacities=torch.linspace(0.0, 1.0, n),
+                       sh=torch.zeros(n, 1, 3), sh_rest=torch.zeros(n, 15, 3),
+                       sh_degree=3, antialias=True)
+    keep = torch.tensor([True, False, True, False, False, True])
+    out = batch.select(keep)
+
+    assert len(out) == 3
+    assert torch.equal(out.means, batch.means[keep])
+    assert torch.equal(out.opacities, batch.opacities[keep])
+    assert out.sh_rest is not None and out.sh_rest.shape[0] == 3
+    assert (out.sh_degree, out.antialias) == (3, True)
+
+
+def test_selecting_without_higher_bands_stays_none():
+    from metal_gauss.viewer import SplatBatch
+
+    batch = SplatBatch(torch.zeros(4, 3), torch.zeros(4, 4), torch.ones(4, 3),
+                       torch.ones(4), torch.zeros(4, 16, 3), None, 3)
+    assert batch.select(torch.tensor([True, False, True, False])).sh_rest is None
+
+
+def test_a_batch_becomes_splats_with_its_bands_joined():
+    """The trainer keeps the DC band separate; a file wants one SH tensor."""
+    from metal_gauss.viewer import SplatBatch
+
+    n = 5
+    dc = torch.randn(n, 1, 3, generator=torch.Generator().manual_seed(1))
+    rest = torch.randn(n, 15, 3, generator=torch.Generator().manual_seed(2))
+    batch = SplatBatch(torch.zeros(n, 3), torch.zeros(n, 4), torch.ones(n, 3),
+                       torch.ones(n), dc, rest, 3)
+    sp = batch.to_splats()
+
+    assert sp.sh.shape == (n, 16, 3)
+    assert torch.equal(sp.sh[:, :1], dc) and torch.equal(sp.sh[:, 1:], rest)
+    assert sp.sh_degree == 3
+
+    single = SplatBatch(torch.zeros(n, 3), torch.zeros(n, 4), torch.ones(n, 3),
+                        torch.ones(n), torch.zeros(n, 16, 3), None, 3)
+    assert single.to_splats().sh.shape == (n, 16, 3)
+
+
+def test_no_crop_hands_the_batch_straight_through(monkeypatch):
+    """Cropping costs a gather over every splat; an unused box must not pay it."""
+    from metal_gauss.viewer import SplatBatch
+
+    live, _ = _fake_live(monkeypatch)
+    batch = SplatBatch(torch.zeros(4, 3), torch.zeros(4, 4), torch.ones(4, 3),
+                       torch.ones(4), torch.zeros(4, 16, 3), None, 3)
+    live.crop = None
+    assert live._cropped(batch) is batch
+
+    live.crop = CropBox((0.0, 0.0, 0.0), (1.0, 0.0, 0.0, 0.0), (1e6, 1e6, 1e6))
+    assert live._cropped(batch) is not batch
+    assert len(live._cropped(batch)) == 4
+
+
 # ---------------------------------------------------------------- pixels
 
 @mps
@@ -720,3 +826,32 @@ def test_the_viewer_renders_exactly_what_metal_gauss_render_does():
                        background=(1.0, 1.0, 1.0), far=100.0)
     theirs = next(iter(render_frames(sp, [vm], K, W, H, background=(1.0, 1.0, 1.0))))
     assert torch.equal(ours, theirs)
+
+
+@mps
+def test_a_cropped_batch_draws_the_splats_the_box_keeps():
+    """Cropping is a selection, not a second renderer: the pixels must match
+    what rendering only the kept splats gives."""
+    from metal_gauss.io import Splats
+    from metal_gauss.render_path import camera_path
+    from metal_gauss.viewer import SplatBatch, render_view
+
+    g = torch.Generator().manual_seed(3)
+    n = 3000
+    means = torch.randn(n, 3, generator=g) * 0.5 + torch.tensor([0.0, 0.0, 3.0])
+    quats = torch.nn.functional.normalize(torch.randn(n, 4, generator=g), dim=1)
+    sp = Splats(means, quats, torch.rand(n, 3, generator=g) * 0.05 + 0.01,
+                torch.rand(n, generator=g) * 0.8 + 0.1,
+                torch.randn(n, 16, 3, generator=g) * 0.3, 3).to("mps")
+    box = CropBox((0.0, 0.0, 3.0), (1.0, 0.0, 0.0, 0.0), (0.6, 0.6, 0.6))
+    keep = box.mask(sp.means)
+    assert 0 < int(keep.sum()) < n, "the box has to actually cut something"
+
+    W = H = 96
+    vm = camera_path(torch.zeros(3), torch.tensor([0.0, 0.0, 3.0]), 8, 10.0, "orbit")[2]
+    K = intrinsics(W, H, 50.0)
+    cropped = render_view(SplatBatch.from_splats(sp).select(keep), vm, K, W, H,
+                          background=(1.0, 1.0, 1.0), far=100.0)
+    kept_only = render_view(SplatBatch.from_splats(sp.subset(keep)), vm, K, W, H,
+                            background=(1.0, 1.0, 1.0), far=100.0)
+    assert torch.equal(cropped, kept_only)

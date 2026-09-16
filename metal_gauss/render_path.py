@@ -240,6 +240,21 @@ def aperture_views(eye, target, radius: float, samples: int, up: str = "-y",
     return out
 
 
+def solid_means(means: torch.Tensor, opacities: torch.Tensor | None = None,
+                min_opacity: float = 0.1, min_splats: int = 256) -> torch.Tensor:
+    """The splats worth measuring a scene by, with its floater haze left out.
+
+    A short run leaves thousands of near-transparent splats spread far wider
+    than the model. Anything measured over all of them -- a framing box, a crop
+    box -- ends up sized by the haze. Unless too little is left: a file whose
+    opacities are all low still has to be measured on something.
+    """
+    if opacities is None:
+        return means
+    solid = opacities >= min_opacity
+    return means[solid] if int(solid.sum()) >= min_splats else means
+
+
 def bbox_framing(means: torch.Tensor, fov_deg: float, margin: float = 1.25,
                  quantile: float = 0.98, up: str = "-y",
                  opacities: torch.Tensor | None = None, min_opacity: float = 0.1,
@@ -263,10 +278,7 @@ def bbox_framing(means: torch.Tensor, fov_deg: float, margin: float = 1.25,
     something.
     """
     _down(up)
-    if opacities is not None:
-        solid = opacities >= min_opacity
-        if int(solid.sum()) >= min_splats:
-            means = means[solid]
+    means = solid_means(means, opacities, min_opacity, min_splats)
     lo = means.quantile(1.0 - quantile, dim=0)
     hi = means.quantile(quantile, dim=0)
     target = 0.5 * (lo + hi)
