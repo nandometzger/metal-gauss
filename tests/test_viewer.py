@@ -335,6 +335,9 @@ def _fake_live(monkeypatch, cls_name="LiveView"):
     live.status, live.readout = NS(content=""), NS(content="")
     live.source = lambda: [0] * 10
     live.wake = threading.Event()
+    live.background, live.far, live.flip = (1.0, 1.0, 1.0), 100.0, None
+    live._export = None
+    live.path_cancel = None                  # no Path folder behind this one
     client = V._Client(NS(scene=NS(set_background_image=lambda image, **kw: None)))
     client.pose = V._Pose((1.0, 0.0, 0.0, 0.0), (0.0, 0.0, 0.0), (0.0, 0.0, 1.0), 1.0, 1.0)
     live.clients = {1: client}
@@ -568,6 +571,93 @@ def test_the_readout_reports_what_a_frame_cost():
         "20.0 ms/frame · 600,000 splats · 1024×576 · 50 fps · 3.2 GB")
     assert readout_text(0.3, 1_000, 512, 512, samples=96) == (
         "300.0 ms/frame · 1,000 splats · 512×512 · 96 samples")
+
+
+# ---------------------------------------------------------------- video export
+
+def test_the_export_plan_is_one_camera_per_frame():
+    """Poses come from the path; intrinsics from each frame's own FOV."""
+    from metal_gauss.keyframes import Keyframe
+    from metal_gauss.viewer import export_plan, intrinsics_vfov, pose_to_viewmat
+
+    keys = [Keyframe((0.0, 0.0, -3.0), (1.0, 0.0, 0.0, 0.0), 1.0),
+            Keyframe((3.0, 0.0, 0.0), (S, 0.0, S, 0.0), 0.5)]
+    plan = export_plan(keys, frames=4, resolution=256, aspect=2.0, loop=True)
+
+    assert len(plan) == 4
+    vm, K = plan[0]
+    assert torch.equal(vm, pose_to_viewmat(keys[0].wxyz, keys[0].position))
+    assert torch.equal(K, intrinsics_vfov(256, 128, keys[0].fov))
+    assert not torch.equal(plan[1][1], K), "a changing FOV changes the intrinsics"
+
+
+def test_an_opengl_scene_exports_with_the_flip_last():
+    from metal_gauss.keyframes import Keyframe
+    from metal_gauss.viewer import export_plan, pose_to_viewmat
+
+    keys = [Keyframe((0.0, 0.0, -3.0), (1.0, 0.0, 0.0, 0.0), 1.0)]
+    plan = export_plan(keys, frames=1, resolution=64, aspect=1.0, world_flip=_GL2CV)
+    assert torch.equal(plan[0][0],
+                       pose_to_viewmat(keys[0].wxyz, keys[0].position, world_flip=_GL2CV))
+
+
+def test_an_export_frame_is_rendered_and_charged_like_a_preview(monkeypatch):
+    """The video shares the trainer's preview budget, one frame per pump."""
+    from types import SimpleNamespace as NS
+
+    from metal_gauss import viewer as V
+
+    live, client = _fake_live(monkeypatch)
+    written = []
+    live._export = V._Export(
+        plan=[(torch.eye(4), torch.eye(3))] * 3, W=16, H=16,
+        writer=NS(write=written.append, close=lambda: written.append("closed"),
+                  abort=lambda: written.append("aborted")),
+        out="path.mp4", radius=0.0, samples=0, focus=1.0)
+    live.path_progress = NS(content="")
+    monkeypatch.setattr(V, "render_view", lambda *a, **kw: torch.zeros(16, 16, 3))
+    budget = PreviewBudget(1.0)
+
+    assert live.pump(max_jobs=1, budget=budget) == 1
+    assert len(written) == 1, "one frame per pump, before any client work"
+    assert live.preview_s > 0.0 and sum(s for _, s in budget._frames) > 0.0
+    assert "1/3" in live.path_progress.content
+
+    live.pump(max_jobs=1, budget=budget)
+    live.pump(max_jobs=1, budget=budget)
+    assert written[-1] == "closed" and live._export is None
+
+
+def test_a_failed_export_frame_leaves_no_half_written_video(monkeypatch):
+    from types import SimpleNamespace as NS
+
+    from metal_gauss import viewer as V
+
+    live, _ = _fake_live(monkeypatch)
+    events = []
+    live._export = V._Export(
+        plan=[(torch.eye(4), torch.eye(3))] * 3, W=16, H=16,
+        writer=NS(write=lambda f: None, close=lambda: events.append("closed"),
+                  abort=lambda: events.append("aborted")),
+        out="path.mp4", radius=0.0, samples=0, focus=1.0)
+    live.path_progress = NS(content="")
+
+    def boom(*a, **kw):
+        raise RuntimeError("out of memory")
+
+    monkeypatch.setattr(V, "render_view", boom)
+    live.pump(max_jobs=1)
+
+    assert events == ["aborted"], "no half-written mp4 left behind"
+    assert live._export is None, "and no retrying it every pump"
+    # In the Path panel: a preview frame succeeding right after clears the
+    # shared status line, and the failure would go unread.
+    assert "out of memory" in live.path_progress.content
+    # The live preview carries on: a broken export is not a broken viewer.
+    monkeypatch.setattr(live, "_frame", lambda *a: (16, 16, None))
+    client = next(iter(live.clients.values()))
+    client.scheduler.invalidate()
+    assert live.pump(max_jobs=1) == 1
 
 
 def test_missing_viser_names_the_extra(monkeypatch):
