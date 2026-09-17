@@ -32,15 +32,15 @@ seed cloud per scene, one evaluator on the official 200-view test split, strictl
 | 15 min | **31.9** | 22.4 | 26.9 | 22.1 |
 | 30 min | **31.9** | 22.4 | 26.9 | 28.5 |
 
-*Best 8-scene-mean PSNR reachable without exceeding each budget; msplat takes its better variant at each point. Em dash means the implementation produces nothing within that budget on all 8 scenes. Full per-rung ladder in [docs/BENCHMARKS.md](docs/BENCHMARKS.md).*
+*Best 8-scene-mean PSNR reachable without exceeding each budget; msplat takes its better variant at each point. Em dash means the implementation produces nothing within that budget on all 8 scenes. Full per-rung ladder in [docs/BENCHMARKS.md](https://github.com/nandometzger/metal-gauss/blob/main/docs/BENCHMARKS.md).*
 <!-- END:budget -->
 
-![PSNR vs wall-clock, 8-scene mean](bench/results/pareto_8scene.svg)
+![PSNR vs wall-clock, 8-scene mean](https://raw.githubusercontent.com/nandometzger/metal-gauss/main/bench/results/pareto_8scene.svg)
 
 Lines trace best-achievable-by-budget. Hollow dots are measured but beaten by a cheaper run of the
 same implementation. Whiskers are ±1 s.e.m. across the 8 scenes.
 
-![Paired per-scene margin with 95% confidence intervals](bench/results/margin_forest.svg)
+![Paired per-scene margin with 95% confidence intervals](https://raw.githubusercontent.com/nandometzger/metal-gauss/main/bench/results/margin_forest.svg)
 
 Paired per scene, because every implementation ran the same 8 scenes. One interval crosses zero:
 our quality margin over spirula at 15 k is not resolved by 8 scenes, though the wall-clock margin
@@ -55,7 +55,7 @@ Domination (faster **and** better) on PSNR / on PSNR+SSIM:
 
 Four trainers, same seed cloud, each given the **same ~390 s**, running however many iterations fit.
 
-![Side-by-side convergence against wall-clock](assets/timelapse.gif)
+![Side-by-side convergence against wall-clock](https://raw.githubusercontent.com/nandometzger/metal-gauss/main/assets/timelapse.gif)
 
 | | final PSNR | first 20 dB | first 24 dB | first 27 dB |
 |---|---:|---:|---:|---:|
@@ -238,10 +238,10 @@ the preview shares the GPU.
 
 | | |
 |---|---|
-| [docs/BENCHMARKS.md](docs/BENCHMARKS.md) | full results, protocol, calibration, noise floors |
-| [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | how it works, the kernels, correctness oracle |
-| [bench/results/NEGATIVE_RESULTS.md](bench/results/NEGATIVE_RESULTS.md) | **every rejected lever and measurement lesson, with numbers** |
-| [bench/compare/STATUS.md](bench/compare/STATUS.md) | every Apple-native implementation surveyed, and the traps |
+| [docs/BENCHMARKS.md](https://github.com/nandometzger/metal-gauss/blob/main/docs/BENCHMARKS.md) | full results, protocol, calibration, noise floors |
+| [docs/ARCHITECTURE.md](https://github.com/nandometzger/metal-gauss/blob/main/docs/ARCHITECTURE.md) | how it works, the kernels, correctness oracle |
+| [bench/results/NEGATIVE_RESULTS.md](https://github.com/nandometzger/metal-gauss/blob/main/bench/results/NEGATIVE_RESULTS.md) | **every rejected lever and measurement lesson, with numbers** |
+| [bench/compare/STATUS.md](https://github.com/nandometzger/metal-gauss/blob/main/bench/compare/STATUS.md) | every Apple-native implementation surveyed, and the traps |
 
 `NEGATIVE_RESULTS.md` is the most useful file here: several published speedups measure near zero on
 this hardware, and several of this repo's own conclusions were wrong until re-measured.
