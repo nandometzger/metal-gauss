@@ -227,7 +227,9 @@ def table_budget(fn: str = "sweep8") -> str:
     out += ["", "*Best 8-scene-mean PSNR reachable without exceeding each budget; "
                 "msplat takes its better variant at each point. Em dash means the "
                 "implementation produces nothing within that budget on all 8 scenes. "
-                "Full per-rung ladder in [docs/BENCHMARKS.md](docs/BENCHMARKS.md).*"]
+                "Full per-rung ladder in [docs/BENCHMARKS.md]"
+                "(https://github.com/nandometzger/metal-gauss/blob/main/"
+                "docs/BENCHMARKS.md).*"]
     return "\n".join(out)
 
 
