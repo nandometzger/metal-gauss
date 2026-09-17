@@ -53,3 +53,17 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["metal_gauss"]
+
+# Without this the sdist is 19.5 MB, because hatchling defaults to shipping the
+# working tree: assets/ is 15 MB of gifs and an mp4, bench/ another 6.4 MB of
+# published results. None of it is needed to build, install or test the
+# package, and PyPI is not a CDN for a teaser video. The wheel was always lean
+# (120 KB) since it only ever carried the package directory.
+[tool.hatch.build.targets.sdist]
+include = [
+    "metal_gauss",
+    "tests",
+    "pyproject.toml",
+    "README.md",
+    "LICENSE",
+]
