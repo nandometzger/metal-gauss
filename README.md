@@ -1,4 +1,4 @@
-<p align="center"><img src="assets/logo.png" width="320"></p>
+<p align="center"><img src="https://raw.githubusercontent.com/nandometzger/metal-gauss/main/assets/logo.png" width="320"></p>
 
 <p align="center"><b>3D Gaussian Splatting that trains on Apple Silicon. Metal kernels, no CUDA, no Xcode.</b></p>
 
