@@ -7,6 +7,7 @@
   <img alt="Metal" src="https://img.shields.io/badge/backend-Metal-A855F7">
   <img alt="PyTorch MPS" src="https://img.shields.io/badge/PyTorch-MPS-EE4C2C?logo=pytorch&logoColor=white">
   <img alt="Python 3.10+" src="https://img.shields.io/badge/python-3.10%2B-3776AB?logo=python&logoColor=white">
+  <a href="https://pypi.org/project/metal-gauss/"><img alt="PyPI" src="https://img.shields.io/pypi/v/metal-gauss?color=0A7BBB&logo=pypi&logoColor=white"></a>
   <img alt="License MIT" src="https://img.shields.io/badge/license-MIT-22C55E">
   <img alt="No CUDA" src="https://img.shields.io/badge/CUDA-not%20required-6E7681">
   <img alt="No Xcode" src="https://img.shields.io/badge/Xcode-not%20required-6E7681">
@@ -70,11 +71,17 @@ lego, panel at 400 px, metrics over 20 held-out views at 800 px. Build the inter
 ## 📦 Install
 
 ```bash
-pip install "git+https://github.com/nandometzger/metal-gauss"
+pip install metal-gauss
 ```
 
 macOS on Apple Silicon, Python ≥3.10, PyTorch ≥2.5. Metal kernels compile at **runtime** — no Xcode,
-no `.metallib` step.
+no `.metallib` step, and nothing to build at install time.
+
+For the development version, or to run the benchmarks:
+
+```bash
+pip install "git+https://github.com/nandometzger/metal-gauss"
+```
 
 ## 🚀 Train
 
@@ -149,7 +156,7 @@ surface. That is why the default sweep is small.
 ## 👀 View
 
 ```bash
-pip install "metal-gauss[viewer] @ git+https://github.com/nandometzger/metal-gauss"
+pip install "metal-gauss[viewer]"
 metal-gauss-view scene.ply --up +z
 ```
 
