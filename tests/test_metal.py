@@ -37,6 +37,25 @@ def scene(n=400, seed=0, device="mps", requires_grad=False):
     return means, quats, scales, opac, cols
 
 
+def test_an_empty_scene_renders_the_background():
+    """A crop box can keep nothing, and so can a frustum on an empty file.
+
+    The torch binning path has always returned empty lists for this; the Metal
+    one read `offs[-1]` off a zero-length count and raised IndexError. The
+    viewer contained it, but an empty box has an answer: the background.
+    """
+    W, H = 48, 32
+    empty = torch.zeros(0, 3, device="mps")
+    rgb, alpha, _ = render(empty, torch.zeros(0, 4, device="mps"),
+                           torch.zeros(0, 3, device="mps"), torch.zeros(0, device="mps"),
+                           torch.zeros(0, 16, 3, device="mps"),
+                           intrinsics(W, H), torch.eye(4), W, H,
+                           backend="metal", background=(1.0, 0.0, 0.0))
+    assert rgb.shape == (H, W, 3) and alpha.shape == (H, W)
+    assert torch.equal(rgb, torch.tensor([1.0, 0.0, 0.0], device="mps").expand(H, W, 3))
+    assert float(alpha.max()) == 0.0
+
+
 def test_metal_forward_matches_reference():
     W, H = 96, 64
     K, vm = intrinsics(W, H).to("mps"), torch.eye(4, device="mps")

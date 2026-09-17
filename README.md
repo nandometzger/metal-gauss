@@ -163,6 +163,11 @@ The Lens panel is the same thin lens as `--aperture`. It refines while the camer
 the running mean at 8, 16, 32 and 64 samples and then at all of them. `--up`, `--convention`, `--fov`
 and `--background` mean what they do for `metal-gauss-render`.
 
+The Crop panel cuts away what you do not want: drag the box, rotate it, or set its size, and
+everything outside it disappears from the view, from an exported video, and from **Export cropped
+.ply**. A short run leaves a haze of near-transparent floaters around the model, and this is what
+removes them from the file rather than merely framing around them. Training is never affected.
+
 The Path panel flies a camera through the scene and writes an mp4. **Orbit** and **Wiggle** lay
 down keyframes around the current view; **Add keyframe** captures wherever you are, and the path
 runs smoothly through them and loops. Frames, fps and resolution are yours to set, and the current
