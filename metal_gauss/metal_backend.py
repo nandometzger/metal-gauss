@@ -231,6 +231,13 @@ def build_tile_lists_metal(uv, rxy, depth, valid, conic, opacity, W, H, tile,
     tx, ty = math.ceil(W / tile), math.ceil(H / tile)
     n_tiles = tx * ty
 
+    if uv.shape[0] == 0:
+        # Nothing to bin: a crop box that keeps no splat, or an empty file. The
+        # count kernel returns nothing to cumsum, and reading its last element
+        # raised IndexError where the torch path returns empty lists.
+        return (torch.zeros(0, dtype=torch.int32, device=device),
+                torch.zeros(n_tiles + 1, dtype=torch.int32, device=device), tx)
+
     counts = ext.bin_count(uv.contiguous(), rxy.contiguous(), conic.contiguous(),
                            opacity.contiguous(), valid.to(torch.int32).contiguous(),
                            W, H, tile, tx, ty)
