@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import warnings
 from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -115,20 +116,32 @@ def load_scene(colmap_dir: str | Path, images_dir: str | Path,
     from PIL import Image
 
     rec = pycolmap.Reconstruction(str(colmap_dir))
-    cam = list(rec.cameras.values())[0]
+    # The rasteriser is a pure pinhole: lens distortion is not modelled. Say so
+    # once per camera instead of silently training against the wrong rays.
+    for cid, cam in rec.cameras.items():
+        extra = np.asarray(cam.params)[list(cam.extra_params_idxs())]
+        if np.any(np.abs(extra) > 1e-6):
+            warnings.warn(
+                f"camera {cid} is {cam.model.name} with distortion {extra.tolist()}; "
+                "metal-gauss ignores distortion, undistort the images first "
+                "(colmap image_undistorter) for exact results", stacklevel=2)
 
     views = []
     for im in sorted(rec.images.values(), key=lambda i: i.name):
         p = Path(images_dir) / im.name
         if not p.exists():
             continue
+        cam = rec.cameras[im.camera_id]
         img = Image.open(p).convert("RGB")
         scale = min(1.0, max_resolution / max(img.size))
         W, H = int(round(img.width * scale)), int(round(img.height * scale))
         img = img.resize((W, H), Image.LANCZOS)
         sx, sy = W / cam.width, H / cam.height
-        K = torch.tensor([[cam.params[0] * sx, 0, cam.params[2] * sx],
-                          [0, cam.params[1] * sy, cam.params[3] * sy],
+        # Model-aware accessors: params[] is laid out per camera model, so
+        # indexing it as (fx, fy, cx, cy) is only right for PINHOLE/OPENCV-like
+        # models. SIMPLE_* store (f, cx, cy, ...), which read cx as fy.
+        K = torch.tensor([[cam.focal_length_x * sx, 0, cam.principal_point_x * sx],
+                          [0, cam.focal_length_y * sy, cam.principal_point_y * sy],
                           [0, 0, 1.0]], dtype=torch.float32)
         cfw = im.cam_from_world()
         vm = torch.eye(4)
