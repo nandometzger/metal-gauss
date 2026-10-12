@@ -20,8 +20,9 @@ classifiers = [
 # unconditionally -- needs scipy.spatial.cKDTree for the knn scale init. With
 # them in an extra, `pip install metal-gauss && metal-gauss-train` failed at
 # the first scene it was pointed at, which is the only thing the console
-# scripts this package declares are for. pycolmap stays optional: it is needed
-# only for COLMAP scenes, and Blender scenes never touch it.
+# scripts this package declares are for. COLMAP models are read by
+# metal_gauss.colmap, not pycolmap: pycolmap's wheel bundles a second libomp,
+# and loading it next to torch aborts with OMP Error #15.
 dependencies = [
     "torch>=2.5",
     "numpy>=1.26",
@@ -42,9 +43,9 @@ metal-gauss-render = "metal_gauss.render_path:main"
 metal-gauss-view = "metal_gauss.viewer:main"
 
 [project.optional-dependencies]
-bench = ["pycolmap>=3.10"]
-train = ["pycolmap>=3.10"]      # pillow/scipy moved to core; kept for compatibility
-test = ["pytest>=8.0"]
+bench = []                      # pycolmap no longer needed; kept for compatibility
+train = []                      # pillow/scipy moved to core, pycolmap dropped
+test = ["pytest>=8.0", "pycolmap>=3.10"]  # cross-checks metal_gauss.colmap, in a torch-free subprocess
 viewer = ["viser>=1.1,<2"]
 
 [build-system]

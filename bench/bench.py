@@ -14,6 +14,7 @@ import numpy as np
 import torch
 
 from metal_gauss import render
+from metal_gauss.colmap import read_model
 from metal_gauss.io import load_ply
 
 
@@ -40,20 +41,17 @@ def main():
     ap.add_argument("--out", default=None)
     args = ap.parse_args()
 
-    import pycolmap
-
-    rec = pycolmap.Reconstruction(args.colmap)
+    rec = read_model(args.colmap)
     im = sorted(rec.images.values(), key=lambda i: i.name)[args.frame_index]
-    cam = im.camera
+    cam = rec.cameras[im.camera_id]
     W, H = args.width, args.height
     sx, sy = W / cam.width, H / cam.height
-    K = torch.tensor([[cam.params[0] * sx, 0, cam.params[2] * sx],
-                      [0, cam.params[1] * sy, cam.params[3] * sy],
+    K = torch.tensor([[cam.fx * sx, 0, cam.cx * sx],
+                      [0, cam.fy * sy, cam.cy * sy],
                       [0, 0, 1.0]], dtype=torch.float32, device="mps")
-    cfw = im.cam_from_world()
     vm = torch.eye(4, device="mps")
-    vm[:3, :3] = torch.as_tensor(cfw.rotation.matrix(), dtype=torch.float32, device="mps")
-    vm[:3, 3] = torch.as_tensor(np.asarray(cfw.translation), dtype=torch.float32, device="mps")
+    vm[:3, :3] = torch.as_tensor(im.R, dtype=torch.float32, device="mps")
+    vm[:3, 3] = torch.as_tensor(im.t, dtype=torch.float32, device="mps")
 
     sp = load_ply(args.ply, device="mps")
     print(f"{len(sp):,} gaussians @ {W}x{H}")

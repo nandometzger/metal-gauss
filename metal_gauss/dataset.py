@@ -112,19 +112,24 @@ class Scene:
 
 def load_scene(colmap_dir: str | Path, images_dir: str | Path,
                max_resolution: int = 1600, eval_split_every: int = 8) -> Scene:
-    import pycolmap
     from PIL import Image
 
-    rec = pycolmap.Reconstruction(str(colmap_dir))
+    from .colmap import NON_PINHOLE, read_model
+
+    rec = read_model(colmap_dir)
     # The rasteriser is a pure pinhole: lens distortion is not modelled. Say so
     # once per camera instead of silently training against the wrong rays.
     for cid, cam in rec.cameras.items():
-        extra = np.asarray(cam.params)[list(cam.extra_params_idxs())]
-        if np.any(np.abs(extra) > 1e-6):
-            warnings.warn(
-                f"camera {cid} is {cam.model.name} with distortion {extra.tolist()}; "
-                "metal-gauss ignores distortion, undistort the images first "
-                "(colmap image_undistorter) for exact results", stacklevel=2)
+        if cam.model in NON_PINHOLE:
+            what = "not a pinhole projection"
+        elif np.any(np.abs(cam.extra) > 1e-6):
+            what = f"distortion {cam.extra.tolist()}"
+        else:
+            continue
+        warnings.warn(
+            f"camera {cid} is {cam.model} ({what}); metal-gauss ignores distortion, "
+            "undistort the images first (colmap image_undistorter) for exact results",
+            stacklevel=2)
 
     views = []
     for im in sorted(rec.images.values(), key=lambda i: i.name):
@@ -137,16 +142,15 @@ def load_scene(colmap_dir: str | Path, images_dir: str | Path,
         W, H = int(round(img.width * scale)), int(round(img.height * scale))
         img = img.resize((W, H), Image.LANCZOS)
         sx, sy = W / cam.width, H / cam.height
-        # Model-aware accessors: params[] is laid out per camera model, so
-        # indexing it as (fx, fy, cx, cy) is only right for PINHOLE/OPENCV-like
-        # models. SIMPLE_* store (f, cx, cy, ...), which read cx as fy.
-        K = torch.tensor([[cam.focal_length_x * sx, 0, cam.principal_point_x * sx],
-                          [0, cam.focal_length_y * sy, cam.principal_point_y * sy],
+        # params[] is laid out per camera model: indexing it as (fx, fy, cx, cy)
+        # is only right for PINHOLE/OPENCV-like models. SIMPLE_* store
+        # (f, cx, cy, ...), which read cx as fy. Camera.fx/fy/cx/cy know the layout.
+        K = torch.tensor([[cam.fx * sx, 0, cam.cx * sx],
+                          [0, cam.fy * sy, cam.cy * sy],
                           [0, 0, 1.0]], dtype=torch.float32)
-        cfw = im.cam_from_world()
         vm = torch.eye(4)
-        vm[:3, :3] = torch.as_tensor(cfw.rotation.matrix(), dtype=torch.float32)
-        vm[:3, 3] = torch.as_tensor(np.asarray(cfw.translation), dtype=torch.float32)
+        vm[:3, :3] = torch.as_tensor(im.R, dtype=torch.float32)
+        vm[:3, 3] = torch.as_tensor(im.t, dtype=torch.float32)
         # uint8 storage: 162 full-res frames as float32 was 4x the memory and
         # OOMed a 24GB M5 alongside the 1M-splat Adam state. Convert per step.
         views.append(View(im.name,
@@ -157,6 +161,6 @@ def load_scene(colmap_dir: str | Path, images_dir: str | Path,
     heldout_names = {v.name for v in heldout}
     train = [v for v in views if v.name not in heldout_names]
 
-    pts = np.array([p.xyz for p in rec.points3D.values()], np.float32)
-    cols = np.array([p.color for p in rec.points3D.values()], np.float32) / 255.0
+    pts = rec.points.astype(np.float32)
+    cols = rec.colors.astype(np.float32) / 255.0
     return Scene(train, heldout, pts, cols)
