@@ -450,7 +450,7 @@ wheels = [
 
 [[package]]
 name = "metal-gauss"
-version = "0.2.0"
+version = "0.2.1"
 source = { editable = "." }
 dependencies = [
     { name = "ninja" },
@@ -466,14 +466,9 @@ dependencies = [
 ]
 
 [package.optional-dependencies]
-bench = [
-    { name = "pycolmap" },
-]
 test = [
-    { name = "pytest" },
-]
-train = [
     { name = "pycolmap" },
+    { name = "pytest" },
 ]
 viewer = [
     { name = "viser" },
@@ -485,8 +480,7 @@ requires-dist = [
     { name = "numpy", specifier = ">=1.26" },
     { name = "pillow", specifier = ">=10.0" },
     { name = "plyfile", specifier = ">=1.0" },
-    { name = "pycolmap", marker = "extra == 'bench'", specifier = ">=3.10" },
-    { name = "pycolmap", marker = "extra == 'train'", specifier = ">=3.10" },
+    { name = "pycolmap", marker = "extra == 'test'", specifier = ">=3.10" },
     { name = "pytest", marker = "extra == 'test'", specifier = ">=8.0" },
     { name = "scipy", specifier = ">=1.11" },
     { name = "torch", specifier = ">=2.5" },
