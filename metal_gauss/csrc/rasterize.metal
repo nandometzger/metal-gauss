@@ -9,6 +9,33 @@ using namespace metal;
 // design of the abandoned gsplat MPS PR. A Metal radix sort would remove that
 // round trip but is not the bottleneck: the per-pixel loop below is.
 #define STAGE 256
+#define MAX_SIMDGROUPS 32   // 1024 threads / 32 lanes: one mask bit each
+
+// Per-simdgroup cull. A staged gaussian that passed the TILE test usually
+// reaches only a corner of the tile: measured on room1 at 270p, only 24% of
+// (tile entry, simdgroup) pairs have any lane with alpha >= 1/255. The other
+// 76% ran the full predicated backward -- ten simd_sums of zeros -- and the
+// forward's exp, for nothing.
+//
+// Each simdgroup publishes the bounding box of its lanes' pixel CENTRES
+// (simd_min/simd_max, so no assumption about how lanes map to pixels, and
+// partial edge threadgroups are covered). Each staging thread then tests its
+// gaussian against every box with binning's own min_q_over_rect and sets one
+// bit per simdgroup that may be live. A clear bit means no centre in that box
+// reaches alpha 1/255, so no lane would have blended it: skipping is exact.
+// The margin absorbs float rounding between this and the per-pixel test.
+inline uint live_simdgroups(float2 mu, float3 c, float op,
+                            threadgroup const float4* rects, uint nsg)
+{
+    const float thr = 2.0f * log(max(255.0f * op, 1.0f));
+    const float thr_m = thr * 1.0001f + 1e-4f;
+    uint m = 0u;
+    for (uint k = 0; k < nsg; ++k) {
+        const float4 r = rects[k];                     // x_lo, x_hi, y_lo, y_hi
+        if (min_q_over_rect(mu, c, r.x, r.y, r.z, r.w) < thr_m) m |= 1u << k;
+    }
+    return m;
+}
 
 kernel void rasterize_forward(
     device const float2*  uv            [[buffer(0)]],
@@ -24,7 +51,10 @@ kernel void rasterize_forward(
     constant uint4&       dims          [[buffer(10)]],  // W, H, tile, tiles_x
     uint2 gid  [[thread_position_in_grid]],
     uint2 lid  [[thread_position_in_threadgroup]],
-    uint2 tgs  [[threads_per_threadgroup]])
+    uint2 tgs  [[threads_per_threadgroup]],
+    uint  sg        [[simdgroup_index_in_threadgroup]],
+    uint  nsg       [[simdgroups_per_threadgroup]],
+    uint  simd_lane [[thread_index_in_simdgroup]])
 {
     const uint W = dims.x, H = dims.y, tile = dims.z, tiles_x = dims.w;
     // No early return: every thread must reach the threadgroup barriers, so
@@ -46,7 +76,14 @@ kernel void rasterize_forward(
     threadgroup float3 s_conic[STAGE];
     threadgroup float  s_op[STAGE];
     threadgroup float3 s_col[STAGE];
+    threadgroup uint   s_live[STAGE];             // bit k: simdgroup k may blend it
+    threadgroup float4 s_sgrect[MAX_SIMDGROUPS];
     threadgroup atomic_int s_done;
+
+    const float4 my_rect = float4(simd_min(px.x), simd_max(px.x),
+                                  simd_min(px.y), simd_max(px.y));
+    if (simd_lane == 0) s_sgrect[sg] = my_rect;
+    threadgroup_barrier(mem_flags::mem_threadgroup);
 
     float  T   = 1.0f;
     float3 acc = float3(0.0f);
@@ -67,11 +104,13 @@ kernel void rasterize_forward(
             s_conic[t] = float3(conic[g]);
             s_op[t] = opacity[g];
             s_col[t] = float3(color[g]);
+            s_live[t] = live_simdgroups(s_uv[t], s_conic[t], s_op[t], s_sgrect, nsg);
         }
         threadgroup_barrier(mem_flags::mem_threadgroup);
 
         if (!done) {
             for (int j = 0; j < n; ++j) {
+                if (((s_live[j] >> sg) & 1u) == 0u) continue;   // simdgroup-uniform
                 const float2 d = px - s_uv[j];
                 const float3 c = s_conic[j];
                 const float power = -0.5f * (c.x * d.x * d.x + 2.0f * c.y * d.x * d.y
@@ -139,6 +178,8 @@ kernel void rasterize_backward(
     uint2 gid  [[thread_position_in_grid]],
     uint2 lid  [[thread_position_in_threadgroup]],
     uint2 tgs  [[threads_per_threadgroup]],
+    uint  sg        [[simdgroup_index_in_threadgroup]],
+    uint  nsg       [[simdgroups_per_threadgroup]],
     uint  simd_lane [[thread_index_in_simdgroup]])
 {
     const uint W = dims.x, H = dims.y, tile = dims.z, tiles_x = dims.w;
@@ -168,6 +209,14 @@ kernel void rasterize_backward(
     threadgroup float3 s_conic[STAGE];
     threadgroup float  s_op[STAGE];
     threadgroup float3 s_col[STAGE];
+    threadgroup uint   s_live[STAGE];             // see live_simdgroups
+    threadgroup float4 s_sgrect[MAX_SIMDGROUPS];
+
+    // Published before the loop; the barrier at the top of the first batch
+    // orders it before any staging thread reads it.
+    const float4 my_rect = float4(simd_min(px.x), simd_max(px.x),
+                                  simd_min(px.y), simd_max(px.y));
+    if (simd_lane == 0) s_sgrect[sg] = my_rect;
 
     float  T = inimg ? final_T[o] : 1.0f;
     float3 suffix = float3(0.0f);
@@ -184,10 +233,16 @@ kernel void rasterize_backward(
             s_conic[t] = float3(conic[g]);
             s_op[t] = opacity[g];
             s_col[t] = float3(color[g]);
+            s_live[t] = live_simdgroups(s_uv[t], s_conic[t], s_op[t], s_sgrect, nsg);
         }
         threadgroup_barrier(mem_flags::mem_threadgroup);
 
         for (int j = n - 1; j >= 0; --j) {
+            // Simdgroup-uniform, so the simd_sums below stay convergent: either
+            // every lane of this simdgroup skips the gaussian or none does. A
+            // skipped gaussian had no active lane, so it changed neither T nor
+            // the suffixes and contributed only zeros.
+            if (((s_live[j] >> sg) & 1u) == 0u) continue;
             const int i = base + j;
             const float2 d = px - s_uv[j];
             const float3 c = s_conic[j];

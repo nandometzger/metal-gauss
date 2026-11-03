@@ -98,11 +98,13 @@ def _load():
         extra_ldflags=["-framework", "Metal", "-framework", "Foundation"],
         verbose=False,
     )
-    _ext.init((_HERE / "csrc" / "rasterize.metal").read_text() + "\n"
+    # binning.metal first: rasterize.metal reuses its min_q_over_rect, so the
+    # rasteriser's per-simdgroup cull is the same test the binning applies.
+    _ext.init((_HERE / "csrc" / "binning.metal").read_text() + "\n"
+              + (_HERE / "csrc" / "rasterize.metal").read_text() + "\n"
               + (_HERE / "csrc" / "preprocess.metal").read_text() + "\n"
               + (_HERE / "csrc" / "adam.metal").read_text() + "\n"
-              + (_HERE / "csrc" / "ssim.metal").read_text() + "\n"
-              + (_HERE / "csrc" / "binning.metal").read_text())
+              + (_HERE / "csrc" / "ssim.metal").read_text())
     return _ext
 
 
