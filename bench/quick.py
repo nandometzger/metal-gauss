@@ -17,15 +17,17 @@ import sys
 import time
 from pathlib import Path
 
-from bench import paths as _paths
+# ROOT on sys.path so `bench.*` imports when this file is run directly. Without
+# it sys.path[0] is bench/, which contains bench.py, and `import bench` resolves
+# to that module instead of this package -- so this has to come BEFORE the
+# first `from bench import`, not after it.
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from bench import paths as _paths  # noqa: E402
 
 ROOM1_COLMAP = _paths.room1("colmap")
 ROOM1_IMAGES = _paths.room1("images")
 RESULTS = Path(__file__).parent / "results"
-# ROOT on sys.path so `bench.provenance` imports when this file is run
-# directly. Without it sys.path[0] is bench/, which contains bench.py, and
-# `import bench` resolves to that module instead of this package.
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 # Reference PSNRs are Brush's saved eval renders RESCORED AT EACH TIER'S
 # RESOLUTION (bench/results/brush_reference_multires.json). Comparing a 640p

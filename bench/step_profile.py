@@ -23,13 +23,15 @@ from metal_gauss.metal_backend import render
 from metal_gauss.train import (_gaussian_kernel, init_params, make_optimizer,
                                render_view, scene_extent, split_sh, ssim)
 
-from bench import paths as _paths
+# ROOT on sys.path so `bench.*` imports when this file is run directly. Without
+# it sys.path[0] is bench/, which contains bench.py, and `import bench` resolves
+# to that module instead of this package -- so this has to come BEFORE the
+# first `from bench import`, not after it.
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from bench import paths as _paths  # noqa: E402
 
 RESULTS = Path(__file__).parent / "results"
-# ROOT on sys.path so `bench.provenance` imports when this file is run
-# directly. Without it sys.path[0] is bench/, which contains bench.py, and
-# `import bench` resolves to that module instead of this package.
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 DEF_COLMAP = _paths.room1("colmap")
 DEF_IMAGES = _paths.room1("images")
 
@@ -44,7 +46,7 @@ def main():
                     help="NeRF-synthetic scene dir. Without this the profile "
                          "runs on room1, which is PORTRAIT: --res 800 there "
                          "gives 450x800, not 800x800, so a profile meant to "
-                         "match a square Blender scene silently lands at 56% "
+                         "match a square Blender scene silently lands at 56%% "
                          "of the pixel count on different geometry.")
     ap.add_argument("--colmap", default=DEF_COLMAP)
     ap.add_argument("--images", default=DEF_IMAGES)
