@@ -37,6 +37,23 @@ inline uint live_simdgroups(float2 mu, float3 c, float op,
     return m;
 }
 
+// The pixel a thread shades. The cull above skips per simdgroup, so the more
+// compact a simdgroup's 32 pixels, the fewer gaussians reach its box: row-major
+// threads give 16x2 strips at tile 16, and an 8x4 block instead cuts the live
+// (entry, simdgroup) pairs on room1 from 24% to 19%. Built from the simdgroup
+// and lane indices, so it is a bijection however lanes are numbered. A partial
+// edge threadgroup, or a tile that is not a multiple of 8, keeps row-major
+// pixels; the cull reads each simdgroup's actual box, so either is exact.
+inline uint2 shaded_pixel(uint2 gid, uint2 lid, uint2 tgs, uint tile,
+                          uint sg, uint nsg, uint simd_lane)
+{
+    if (tgs.x != tile || tgs.y != tile || tile % 8u != 0u || nsg * 32u != tile * tile)
+        return gid;
+    const uint blocks_x = tile / 8u;
+    return gid - lid + uint2((sg % blocks_x) * 8u + (simd_lane & 7u),
+                             (sg / blocks_x) * 4u + (simd_lane >> 3u));
+}
+
 // Both raster kernels run one tile per threadgroup, so a 32x32 tile needs 1024
 // threads. Without this attribute the compiler may spend registers in a way that
 // lowers the pipeline's limit: on the hosted CI GPU the backward came out at
@@ -54,7 +71,7 @@ kernel void rasterize_forward(
     device float*         out_T         [[buffer(8)]],
     device int*           out_ncontrib  [[buffer(9)]],
     constant uint4&       dims          [[buffer(10)]],  // W, H, tile, tiles_x
-    uint2 gid  [[thread_position_in_grid]],
+    uint2 grid [[thread_position_in_grid]],
     uint2 lid  [[thread_position_in_threadgroup]],
     uint2 tgs  [[threads_per_threadgroup]],
     uint  sg        [[simdgroup_index_in_threadgroup]],
@@ -62,6 +79,7 @@ kernel void rasterize_forward(
     uint  simd_lane [[thread_index_in_simdgroup]])
 {
     const uint W = dims.x, H = dims.y, tile = dims.z, tiles_x = dims.w;
+    const uint2 gid = shaded_pixel(grid, lid, tgs, tile, sg, nsg, simd_lane);
     // No early return: every thread must reach the threadgroup barriers, so
     // out-of-image threads become passive loaders.
     const bool inimg = (gid.x < W) && (gid.y < H);
@@ -181,7 +199,7 @@ kernel void rasterize_backward(
     // the reduction, the sqrt and a tenth atomic ran on EVERY backward,
     // including every run that discards the statistic -- which is the default.
     constant uint&        want_absgrad  [[buffer(16)]],
-    uint2 gid  [[thread_position_in_grid]],
+    uint2 grid [[thread_position_in_grid]],
     uint2 lid  [[thread_position_in_threadgroup]],
     uint2 tgs  [[threads_per_threadgroup]],
     uint  sg        [[simdgroup_index_in_threadgroup]],
@@ -189,6 +207,7 @@ kernel void rasterize_backward(
     uint  simd_lane [[thread_index_in_simdgroup]])
 {
     const uint W = dims.x, H = dims.y, tile = dims.z, tiles_x = dims.w;
+    const uint2 gid = shaded_pixel(grid, lid, tgs, tile, sg, nsg, simd_lane);
     const bool inimg = (gid.x < W) && (gid.y < H);
 
     const uint tile_id = (min(gid.y, H - 1) / tile) * tiles_x + (min(gid.x, W - 1) / tile);
