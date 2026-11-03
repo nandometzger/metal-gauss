@@ -200,6 +200,12 @@ kernel void preprocess_forward(
     out_rxy[g] = float2(rx, ry);
     out_valid[g] = ok ? 1 : 0;
 
+    // Only binned gaussians are ever read by the rasteriser, and binning skips
+    // !ok, so an invalid gaussian's colour is never seen. Skipping SH for it
+    // drops 16 SH rows of reads -- and on room1 only 23% of 600k gaussians are
+    // in a given training view (3DGS CUDA blog, "visibility-gated SH").
+    if (!ok) { out_color[g] = packed_float3(0.0f); return; }
+
     // SH -> colour
     float3 dirv = mean - P.cam_center.xyz;
     float invn = 1.0f / max(length(dirv), 1e-12f);
@@ -240,7 +246,14 @@ kernel void preprocess_backward(
     float3 dmean = float3(0);
 
     // ---------------- SH branch ------------------------------------------
-    {
+    // d_color is the SH branch's only input gradient. When it is zero -- every
+    // gaussian the rasteriser never blended, i.e. most of them in any one view
+    // -- the branch writes zeros and adds nothing to dmean, so skip its two
+    // passes over the 16 SH rows and write the zeros directly.
+    const float3 dcol = float3(d_color[g]);
+    if (all(dcol == 0.0f)) {
+        for (int i = 0; i < 16; ++i) sh_write(d_sh, d_sh_rest, g, i, P.shl, float3(0));
+    } else {
         float3 dirv = mean - P.cam_center.xyz;
         float n = max(length(dirv), 1e-12f);
         float3 dir = dirv / n;
@@ -251,7 +264,6 @@ kernel void preprocess_backward(
         float3 pre = float3(0);
         for (int i = 0; i < nb; ++i) pre += B[i] * sh_read(sh, sh_rest, g, i, P.shl);
         pre += 0.5f;
-        const float3 dcol = float3(d_color[g]);
         const float3 dpre = select(float3(0), dcol, pre > 0.0f);
 
         float3 ddir = float3(0);

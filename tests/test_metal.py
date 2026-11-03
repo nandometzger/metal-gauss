@@ -117,6 +117,39 @@ def test_metal_gradients_match_reference():
         )
 
 
+def test_metal_sh_gradients_match_reference_with_offscreen_gaussians():
+    """The fused preprocess skips SH for gaussians the view never sees.
+
+    The test above passes explicit colours, which bypasses the fused
+    preprocess entirely, so this is the only check of its SH and projection
+    backward against the oracle. Half the scene is pushed out of frame: those
+    take the skip path in both kernels and must come back exactly zero, while
+    the visible half must still match torch_ref.
+    """
+    W, H = 64, 48
+    K, vm = intrinsics(W, H).to("mps"), torch.eye(4, device="mps")
+    n = 300
+    m0, q0, s0, o0, _ = scene(n=n, seed=13)
+    off = torch.arange(n, device="mps") % 2 == 1
+    m0 = m0.clone()
+    m0[off, 0] += 20.0                    # far outside the frustum at z ~ 4
+    sh0 = (torch.randn(n, 16, 3) * 0.25).to("mps")
+
+    grads = {}
+    for backend in ("torch_ref", "metal"):
+        m, q, s, sh = (t.clone().requires_grad_(True) for t in (m0, q0, s0, sh0))
+        rgb, alpha, _ = render(m, q, s, o0, sh, K, vm, W, H, sh_degree=3, backend=backend)
+        (rgb.square().mean() + 0.1 * alpha.square().mean()).backward()
+        grads[backend] = dict(means=m.grad, quats=q.grad, scales=s.grad, sh=sh.grad)
+
+    for name, b in grads["metal"].items():
+        a = grads["torch_ref"][name]
+        assert torch.isfinite(b).all(), f"{name}: metal gradient has non-finite values"
+        assert float(b[off].abs().max()) == 0.0, f"{name}: off-screen gaussian got a gradient"
+        rel = (a - b).abs().max() / a.abs().max().clamp_min(1e-8)
+        assert rel < 5e-2, f"{name}: metal vs torch_ref relative grad error {rel:.3e}"
+
+
 def test_metal_refuses_cpu_tensors():
     """No silent device migration: a CPU tensor must be an error, not a copy."""
     from metal_gauss import metal_backend
