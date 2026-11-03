@@ -37,6 +37,11 @@ inline uint live_simdgroups(float2 mu, float3 c, float op,
     return m;
 }
 
+// Both raster kernels run one tile per threadgroup, so a 32x32 tile needs 1024
+// threads. Without this attribute the compiler may spend registers in a way that
+// lowers the pipeline's limit: on the hosted CI GPU the backward came out at
+// 896, and Metal drops an over-limit dispatch without an error.
+[[max_total_threads_per_threadgroup(1024)]]
 kernel void rasterize_forward(
     device const float2*  uv            [[buffer(0)]],
     device const packed_float3* conic   [[buffer(1)]],
@@ -147,6 +152,7 @@ kernel void rasterize_forward(
 // transmittance at each Gaussian by dividing it out, which avoids storing a
 // per-(pixel, gaussian) buffer. Gradients accumulate atomically because many
 // pixels touch the same Gaussian.
+[[max_total_threads_per_threadgroup(1024)]]
 kernel void rasterize_backward(
     device const float2*  uv            [[buffer(0)]],
     device const packed_float3* conic   [[buffer(1)]],
