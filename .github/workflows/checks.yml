@@ -68,10 +68,15 @@ jobs:
           cache: pip
 
       - name: Install test dependencies
+        # torch < 2.15 because 2.15.0 rejects the hosted runner's GPU: "Skipping
+        # device Apple Paravirtual device that does not support Metal 2.0", so
+        # mps_available=False and the job stops before any test. On the same
+        # runner image 2.14.1 still sees it and the suite runs. Pinned here and
+        # not in pyproject: real Apple Silicon is unaffected.
         run: |
           python -m pip install --upgrade pip
           python -m pip install -e ".[bench,train,test]" \
-            lpips scikit-image imageio tqdm torchvision
+            lpips scikit-image imageio tqdm "torch<2.15" "torchvision<0.30"
 
       - name: Verify Apple Silicon and MPS
         run: |
