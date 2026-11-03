@@ -196,3 +196,14 @@ def test_metal_matches_reference_at_every_tile_size(tile):
         rel = (a - b).abs().max() / a.abs().max().clamp_min(1e-8)
         assert rel < 5e-2, f"tile {tile}: {name} relative grad error {rel:.3e}"
 
+
+def test_metal_refuses_a_tile_the_gpu_cannot_dispatch():
+    """A threadgroup over the pipeline's limit is dropped by Metal without an
+    error, so the image and every gradient come back as zeros. One tile is one
+    threadgroup: 64x64 is 4096 threads, past any Apple GPU's 1024."""
+    W, H = 96, 64
+    m, q, s, o, c = scene(n=50)
+    with pytest.raises(RuntimeError, match="threads per threadgroup"):
+        render(m, q, s, o, None, intrinsics(W, H).to("mps"), torch.eye(4, device="mps"),
+               W, H, colors=c, backend="metal", tile=64)
+
