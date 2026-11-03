@@ -157,3 +157,42 @@ def test_metal_refuses_cpu_tensors():
     m, q, s, o, c = scene(n=10, device="cpu")
     with pytest.raises(RuntimeError, match="requires MPS tensors"):
         metal_backend.render(m, q, s, o, None, intrinsics(W, H), torch.eye(4), W, H, colors=c)
+
+
+def elongated_scene(n=300, seed=17, requires_grad=False):
+    """Long, thin, rotated splats: an ellipse that clears its tile's bounds
+    but reaches only some of the tile's simdgroups, which is the case the
+    rasteriser's per-simdgroup cull has to get right."""
+    m, q, s, o, c = scene(n=n, seed=seed)
+    s = s * torch.tensor([4.0, 0.5, 1.0], device=s.device)
+    if requires_grad:
+        for t in (m, q, s, o, c):
+            t.requires_grad_(True)
+    return m, q, s, o, c
+
+
+@pytest.mark.parametrize("tile", [8, 16, 32])   # 2, 8 and 32 simdgroups
+def test_metal_matches_reference_at_every_tile_size(tile):
+    """The cull keeps one mask bit per simdgroup; 32x32 uses all 32 bits."""
+    W, H = 96, 64
+    K, vm = intrinsics(W, H).to("mps"), torch.eye(4, device="mps")
+
+    out, grads = {}, {}
+    for backend in ("torch_ref", "metal"):
+        m, q, s, o, c = elongated_scene(requires_grad=True)
+        # torch_ref's image depends on its own tile size too, so match it.
+        rgb, alpha, _ = render(m, q, s, o, None, K, vm, W, H, colors=c, backend=backend,
+                               tile=tile)
+        (rgb.square().mean() + 0.1 * alpha.square().mean()).backward()
+        out[backend] = (rgb.detach().cpu(), alpha.detach().cpu())
+        grads[backend] = {k: v.grad.detach().cpu() for k, v in
+                          dict(means=m, quats=q, scales=s, opacities=o, colors=c).items()}
+
+    for i, name in [(0, "rgb"), (1, "alpha")]:
+        err = (out["torch_ref"][i] - out["metal"][i]).abs().max().item()
+        assert err < 2e-3, f"tile {tile}: {name} max abs diff {err:.3e} vs torch_ref"
+    for name, a in grads["torch_ref"].items():
+        b = grads["metal"][name]
+        rel = (a - b).abs().max() / a.abs().max().clamp_min(1e-8)
+        assert rel < 5e-2, f"tile {tile}: {name} relative grad error {rel:.3e}"
+
