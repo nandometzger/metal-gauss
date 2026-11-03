@@ -59,6 +59,19 @@ static void checkMPS(const torch::Tensor& t, const char* what) {
     TORCH_CHECK(t.is_contiguous(), what, " must be contiguous");
 }
 
+// One tile is one threadgroup. Metal does not report a threadgroup over the
+// pipeline's limit: the dispatch is dropped and every output keeps its initial
+// value, so the image is black and the gradients are zero. The limit is per
+// pipeline and per GPU (the hosted CI GPU once gave rasterize_backward 896).
+static id<MTLComputePipelineState> tilePso(const char* name, int64_t tile) {
+    id<MTLComputePipelineState> p = pso(name);
+    const int64_t limit = (int64_t)p.maxTotalThreadsPerThreadgroup;
+    TORCH_CHECK(tile * tile <= limit, "tile ", tile, " needs ", tile * tile,
+                " threads per threadgroup; ", name, " allows at most ", limit,
+                " on this GPU");
+    return p;
+}
+
 #define SETBUF(enc, t, idx) \
     [enc setBuffer:getMTLBufferStorage(t) \
             offset:(t).storage_offset() * (t).element_size() atIndex:idx]
@@ -69,6 +82,7 @@ std::vector<torch::Tensor> rasterize_forward(
     int64_t W, int64_t H, int64_t tile, int64_t tiles_x)
 {
     for (auto& t : {uv, conic, opacity, color, gauss_ids, tile_offsets}) checkMPS(t, "input");
+    id<MTLComputePipelineState> p = tilePso("rasterize_forward", tile);
 
     auto fopt = torch::TensorOptions().dtype(torch::kFloat).device(uv.device());
     auto iopt = torch::TensorOptions().dtype(torch::kInt32).device(uv.device());
@@ -81,7 +95,7 @@ std::vector<torch::Tensor> rasterize_forward(
         id<MTLCommandBuffer> cb = torch::mps::get_command_buffer();
         dispatch_sync(torch::mps::get_dispatch_queue(), ^{
             id<MTLComputeCommandEncoder> enc = [cb computeCommandEncoder];
-            [enc setComputePipelineState:pso("rasterize_forward")];
+            [enc setComputePipelineState:p];
             SETBUF(enc, uv, 0);           SETBUF(enc, conic, 1);
             SETBUF(enc, opacity, 2);      SETBUF(enc, color, 3);
             SETBUF(enc, gauss_ids, 4);    SETBUF(enc, tile_offsets, 5);
@@ -138,6 +152,7 @@ std::vector<torch::Tensor> rasterize_backward(
     int64_t W, int64_t H, int64_t tile, int64_t tiles_x,
     bool want_absgrad)
 {
+    id<MTLComputePipelineState> p = tilePso("rasterize_backward", tile);
     auto fopt = torch::TensorOptions().dtype(torch::kFloat).device(uv.device());
     const int64_t N = uv.size(0);
     auto d_uv      = torch::zeros({N, 2}, fopt);
@@ -156,7 +171,7 @@ std::vector<torch::Tensor> rasterize_backward(
         id<MTLCommandBuffer> cb = torch::mps::get_command_buffer();
         dispatch_sync(torch::mps::get_dispatch_queue(), ^{
             id<MTLComputeCommandEncoder> enc = [cb computeCommandEncoder];
-            [enc setComputePipelineState:pso("rasterize_backward")];
+            [enc setComputePipelineState:p];
             SETBUF(enc, uv, 0);          SETBUF(enc, conic, 1);
             SETBUF(enc, opacity, 2);     SETBUF(enc, color, 3);
             SETBUF(enc, gauss_ids, 4);   SETBUF(enc, tile_offsets, 5);
