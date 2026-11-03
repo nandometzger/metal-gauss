@@ -171,10 +171,15 @@ def elongated_scene(n=300, seed=17, requires_grad=False):
     return m, q, s, o, c
 
 
-@pytest.mark.parametrize("tile", [8, 16, 32])   # 2, 8 and 32 simdgroups
+@pytest.mark.parametrize("tile", [8, 12, 16, 32])   # 2, 5, 8 and 32 simdgroups
 def test_metal_matches_reference_at_every_tile_size(tile):
-    """The cull keeps one mask bit per simdgroup; 32x32 uses all 32 bits."""
-    W, H = 96, 64
+    """The cull keeps one mask bit per simdgroup; 32x32 uses all 32 bits.
+
+    Full tiles shade 8x4 blocks per simdgroup, partial edge tiles and tile 12
+    row-major pixels. 63 rows leave the bottom tiles one row short at 8, 16
+    and 32: still a whole number of simdgroups, so only the threadgroup's own
+    size tells them from a full tile."""
+    W, H = 100, 63
     K, vm = intrinsics(W, H).to("mps"), torch.eye(4, device="mps")
 
     out, grads = {}, {}
