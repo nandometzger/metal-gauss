@@ -45,7 +45,10 @@ def test_a_looped_path_lands_on_every_keyframe_and_returns():
     keys = [key((0.0, 0.0, 0.0)), key((1.0, 0.0, 0.0)), key((1.0, 1.0, 0.0))]
     path = interpolate(keys, frames=3, loop=True)
 
-    assert [p.position for p in path] == pytest.approx([k.position for k in keys])
+    # One approx per frame: pytest 9.2 refuses approx over nested sequences.
+    assert len(path) == len(keys)
+    for p, k in zip(path, keys):
+        assert p.position == pytest.approx(k.position)
 
 
 def test_a_loop_has_no_seam_where_it_wraps():
