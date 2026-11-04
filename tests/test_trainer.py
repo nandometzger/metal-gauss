@@ -185,6 +185,22 @@ def test_trainer_optimizer_updates_appearance_densely_under_selective_adam():
     assert torch.all(appearance.bias != 0.0), "every image's bias must move"
 
 
+def test_trainer_selective_adam_defaults_to_sh_only_with_global_steps():
+    """The one configuration that measured quality-neutral on NeRF-synthetic.
+    Skipping geometry too, or bias-correcting per gaussian, cost 0.4-1.2 dB."""
+    from metal_gauss.train import make_optimizer
+
+    n = 12
+    p = {"means": torch.randn(n, 3), "log_scales": torch.randn(n, 3),
+         "quats": torch.randn(n, 4), "logit_opac": torch.randn(n),
+         "sh_dc": torch.randn(n, 1, 3), "sh_rest": torch.randn(n, 15, 3)}
+    opt = make_optimizer(p, 1e-3, selective=True)
+    assert {g["name"]: g["rowwise"] for g in opt.param_groups} == {
+        "means": False, "scales": False, "quats": False, "opac": False,
+        "sh_dc": True, "sh_rest": True}
+    assert opt.row_steps is False
+
+
 def test_selective_adam_exposes_standard_state_and_resettable_steps():
     """MCMC can clear moments and per-Gaussian bias-correction history."""
     from metal_gauss.mcmc import reset_adam_state

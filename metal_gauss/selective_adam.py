@@ -4,8 +4,17 @@ Per view only ~20-40% of gaussians project into the frustum; the rest have
 exactly-zero gradients, yet a dense Adam still reads and writes all N x 64
 parameter/state floats every step. Updating the visible subset by index cuts
 optimizer time and memory traffic proportionally (gsplat's selective_adam
-idea). Bias correction uses a PER-GAUSSIAN step count, matching what dense
-Adam would have done had the invisible steps simply not occurred.
+idea). Bias correction uses either a PER-GAUSSIAN step count (row_steps=True,
+as if the hidden steps had not occurred) or the optimiser's global count
+(row_steps=False, gsplat's choice). Only the latter, applied to the SH
+groups alone, measured quality-neutral; see train.make_optimizer.
+
+On MPS the gaussian groups go through one Metal kernel per parameter
+(adam_step_rows), which reads one mask byte for a hidden row and does
+nothing else. The torch paths below were measured SLOWER than dense Adam:
+their gathers, scatters and where-chains cost more than they saved. They
+remain as the CPU path and as the reference the Metal kernel is tested
+against.
 
 The trainer treats this optimizer like a regular torch optimizer: it changes
 param_groups[0]["lr"], adds an appearance-parameter group, and asks MCMC
@@ -30,9 +39,17 @@ class SelectiveAdam(torch.optim.Optimizer):
     """
 
     def __init__(self, groups: list[dict], eps: float = 1e-15,
-                 betas: tuple[float, float] = (0.9, 0.999)):
+                 betas: tuple[float, float] = (0.9, 0.999), fused: bool = True,
+                 row_steps: bool = True):
         defaults = {"lr": 1e-3, "eps": eps, "betas": betas, "rowwise": True}
         super().__init__(groups, defaults)
+        self.fused = fused
+        # False: bias-correct every row with the optimiser's global step count,
+        # as gsplat's selective Adam and dense Adam do. With per-row counts a
+        # relocated gaussian (steps reset to 0) takes ~3x smaller first steps
+        # than dense Adam gives it, and NeRF-synthetic lost 0.4-1.2 dB.
+        self.row_steps = row_steps
+        self._t = 0
         # Keep the old attribute as a compatibility alias for callers that
         # used the initial implementation before it matched torch's API.
         self.groups = self.param_groups
@@ -104,6 +121,11 @@ class SelectiveAdam(torch.optim.Optimizer):
                 visible = visible.to(device=params[0].device)
                 break
 
+        self._t += 1
+        if self.fused and visible.device.type == "mps":
+            self._step_fused(visible)
+            return loss
+
         n = visible.numel()
         nvis = int(visible.sum().item())
         if nvis > n // 2:
@@ -111,6 +133,43 @@ class SelectiveAdam(torch.optim.Optimizer):
         else:
             self._step_indexed(visible)
         return loss
+
+    @torch.no_grad()
+    def _step_fused(self, visible: torch.Tensor) -> None:
+        """One Metal pass per gaussian parameter: no host sync, no gathers."""
+        from metal_gauss.metal_backend import _load
+        ext = _load()
+        visible = visible.contiguous()
+        seen = visible.to(torch.float32)
+        for group in self.param_groups:
+            lr, b1, b2, eps = self._hyper(group)
+            if not group["rowwise"]:
+                # Dense groups get FusedAdam's kernel, i.e. torch.optim.Adam
+                # exactly, rather than _step_dense's five torch passes.
+                for p in group["params"]:
+                    if p.grad is None:
+                        continue
+                    grad = self._check_gradient(p)
+                    st = self._state_for(p, rowwise=False)
+                    st["step"] += 1
+                    ext.adam_step(p.view(-1), grad.contiguous().view(-1),
+                                  st["exp_avg"].view(-1), st["exp_avg_sq"].view(-1),
+                                  lr, b1, b2, eps, st["step"])
+                continue
+            for p in group["params"]:
+                if p.grad is None:
+                    continue
+                if p.dim() == 0 or p.shape[0] < visible.numel():
+                    raise ValueError(
+                        "rowwise SelectiveAdam parameters must have at least "
+                        "one row per visibility-mask entry")
+                grad = self._check_gradient(p)
+                st = self._state_for(p, rowwise=True)
+                st["steps"][:visible.numel()] += seen
+                ext.adam_step_rows(p, grad.contiguous(), st["exp_avg"],
+                                   st["exp_avg_sq"], st["steps"], visible,
+                                   lr, b1, b2, eps,
+                                   0.0 if self.row_steps else float(self._t))
 
     @torch.no_grad()
     def _step_indexed(self, visible: torch.Tensor) -> None:
@@ -140,7 +199,7 @@ class SelectiveAdam(torch.optim.Optimizer):
                 st["steps"][idx] = steps
                 st["exp_avg"][idx] = m
                 st["exp_avg_sq"][idx] = v
-                k = steps
+                k = steps if self.row_steps else torch.full_like(steps, float(self._t))
                 bc1 = 1 - b1 ** k
                 bc2 = 1 - b2 ** k
                 shape = self._shape_for_rows(p)
@@ -178,7 +237,8 @@ class SelectiveAdam(torch.optim.Optimizer):
                     st["exp_avg_sq"] * b2
                     + masked_grad * masked_grad * (1 - b2),
                     st["exp_avg_sq"])
-                k = st["steps"].clamp_min(1.0)
+                k = (st["steps"].clamp_min(1.0) if self.row_steps
+                     else torch.full_like(st["steps"], float(self._t)))
                 bc1 = 1 - b1 ** k
                 bc2 = 1 - b2 ** k
                 step_size = (lr * bc2.sqrt() / bc1).reshape(shape)

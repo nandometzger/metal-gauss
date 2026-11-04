@@ -60,6 +60,11 @@ def main():
     ap.add_argument("--out", default=None)
     ap.add_argument("--torch-adam", action="store_true",
                     help="profile torch.optim.Adam instead of the trainer's FusedAdam")
+    ap.add_argument("--selective-adam", action="store_true",
+                    help="profile the trainer's --selective-adam: only the gaussians "
+                         "each view sees are updated")
+    ap.add_argument("--selective-adam-groups", choices=["all", "sh"], default="sh")
+    ap.add_argument("--selective-adam-steps", choices=["row", "global"], default="global")
     args = ap.parse_args()
 
     dev = "mps"
@@ -75,7 +80,10 @@ def main():
     extent = scene_extent(scene)
 
     # Same construction the trainer uses -- see the note in train.py.
-    opt = make_optimizer(p, 2e-4 * extent, fused=not args.torch_adam)
+    opt = make_optimizer(p, 2e-4 * extent, fused=not args.torch_adam,
+                         selective=args.selective_adam,
+                         selective_groups=args.selective_adam_groups,
+                         selective_steps=args.selective_adam_steps)
 
     # mcmc is amortised: relocate fires once per relocate_every steps, so its
     # per-step share is the amortised mean, not the cost of a relocate step.
@@ -106,7 +114,7 @@ def main():
         loss.backward()
         sync(); t3 = time.perf_counter()
 
-        opt.step()
+        opt.step(info["valid_mask"]) if args.selective_adam else opt.step()
         sync(); t4 = time.perf_counter()
 
         with torch.no_grad():
