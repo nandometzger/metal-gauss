@@ -36,6 +36,12 @@ def test_matches_torch_adam_over_many_steps():
     for a, b in zip(A, B):
         rel = ((a - b).abs().max() / a.abs().max()).item()
         assert rel < 1e-5, f"diverged from torch Adam: rel {rel:.2e}"
+        # The moments too: the parameter only sees sqrt(v), which halves an
+        # error in v -- (1 - b2) rounded in float hid there at 1.3e-5.
+        for key in ("exp_avg", "exp_avg_sq"):
+            x, y = oa.state[a][key], ob.state[b][key]
+            rel = ((x - y).abs().max() / x.abs().max()).item()
+            assert rel < 1e-5, f"{key} diverged from torch Adam: rel {rel:.2e}"
 
 
 def test_state_layout_matches_torch():

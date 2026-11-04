@@ -20,6 +20,8 @@ struct AdamP {
     float eps;
     float bc1;      // 1 - b1^t
     float sqrt_bc2; // sqrt(1 - b2^t)
+    float omb1;     // 1 - b1, rounded from double as torch does: in float,
+    float omb2;     // 1.0f - 0.999f is 1.3e-5 off, and v inherits it
 };
 
 kernel void adam_step(device float*       p   [[buffer(0)]],
@@ -32,8 +34,8 @@ kernel void adam_step(device float*       p   [[buffer(0)]],
     if (i >= P.n) return;
 
     const float gi = g[i];
-    const float mi = fma(P.b1, m[i], (1.0f - P.b1) * gi);
-    const float vi = fma(P.b2, v[i], (1.0f - P.b2) * gi * gi);
+    const float mi = fma(P.b1, m[i], P.omb1 * gi);
+    const float vi = fma(P.b2, v[i], P.omb2 * gi * gi);
     m[i] = mi;
     v[i] = vi;
 

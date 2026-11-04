@@ -335,10 +335,11 @@ void adam_step(torch::Tensor p, torch::Tensor g, torch::Tensor m, torch::Tensor 
     const uint n = (uint)p.numel();
     if (n == 0) return;
 
-    struct { uint n; float lr, b1, b2, eps, bc1, sqrt_bc2; } P = {
+    struct { uint n; float lr, b1, b2, eps, bc1, sqrt_bc2, omb1, omb2; } P = {
         n, (float)lr, (float)b1, (float)b2, (float)eps,
         (float)(1.0 - std::pow(b1, (double)step)),
         (float)std::sqrt(1.0 - std::pow(b2, (double)step)),
+        (float)(1.0 - b1), (float)(1.0 - b2),
     };
 
     @autoreleasepool {
