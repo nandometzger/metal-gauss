@@ -244,6 +244,10 @@ the preview shares the GPU.
 - Run-to-run noise floors: ours **0.19 dB**, Brush **0.74**, spirula **0.15–1.27**, msplat **3.35**
   (no seed flag).
 - `--budget` at 1 M splats: **+2.75 dB** lego, **+1.40** mic, **−0.20** ship, all at ~5× the time.
+- Mip-NeRF 360, all 9 real scenes at 7 k steps and 1 M splats: **26.33 dB, +0.73 over 3DGS at the
+  same 7 k** (8 of 9 scenes ahead). That is quality per step; on time, 9.3 min against the paper's
+  6.4 min on an A6000.
+  [Table](https://github.com/nandometzger/metal-gauss/blob/main/docs/BENCHMARKS.md#mip-nerf-360-all-9-scenes).
 
 ## 📚 More
 
