@@ -295,8 +295,9 @@ def train(args) -> dict:
     # (600k, 9.60 -> 4.75 ms). What it skips decides the quality: skipping
     # every group with per-gaussian bias correction cost 0.86 dB on all 8
     # NeRF-synthetic scenes; skipping only the SH groups with the global step
-    # count measured +0.03 dB [-0.04, +0.10]. Those are the defaults; see
-    # bench/results/NEGATIVE_RESULTS.md.
+    # count measured +0.03 dB [-0.04, +0.10] there and +0.23 dB on room1 at
+    # 10k steps, 21% less wall time. So it is on by default, with those
+    # settings; see bench/results/NEGATIVE_RESULTS.md.
     p = init_params(scene, args.budget, device)
     # Position LR is relative to scene scale, and SH bands 1+ train 20x colder
     # than DC: with ~160 views, hot high-band SH memorises per-view shading and
@@ -768,7 +769,9 @@ def main():
     # a proportional miniature of a long one, not a truncation. Without this,
     # rankings measured on a 1k-step run do not transfer to 10k.
     ap.add_argument("--steps-scaler", type=float, default=1.0)
-    ap.add_argument("--selective-adam", action="store_true")
+    ap.add_argument("--selective-adam", action=argparse.BooleanOptionalAction, default=True,
+                    help="update only the SH of gaussians the view sees (default); "
+                         "--no-selective-adam for dense Adam")
     ap.add_argument("--selective-adam-groups", choices=["all", "sh"], default="sh",
                     help="which parameters --selective-adam skips for hidden "
                          "gaussians: all of them, or only the SH colour")

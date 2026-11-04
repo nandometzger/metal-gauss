@@ -52,7 +52,8 @@ def _write(out: Path, args, rows: list, t_all: float) -> tuple:
                      "resolution": args.resolution,
                      "repeats": args.repeats,
                      "antialias": bool(args.antialias),
-                     "selective_adam": bool(args.selective_adam),
+                     "selective_adam": ("default" if args.selective_adam is None
+                                        else args.selective_adam),
                      "selective_adam_groups": args.selective_adam_groups or "default",
                      "selective_adam_steps": args.selective_adam_steps or "default",
                      "densify_weight": args.densify_weight or "default",
@@ -80,8 +81,8 @@ def main():
                     help="pass --antialias to the trainer")
     ap.add_argument("--filter-3d", action="store_true",
                     help="pass --filter-3d to the trainer")
-    ap.add_argument("--selective-adam", action="store_true",
-                    help="pass --selective-adam to the trainer")
+    ap.add_argument("--selective-adam", action=argparse.BooleanOptionalAction, default=None,
+                    help="pass --[no-]selective-adam to the trainer; unset = its default")
     ap.add_argument("--selective-adam-groups", default=None,
                     help="pass --selective-adam-groups to the trainer")
     ap.add_argument("--selective-adam-steps", default=None,
@@ -113,8 +114,8 @@ def main():
             spec["antialias"] = True
         if args.filter_3d:
             spec["filter_3d"] = True
-        if args.selective_adam:
-            spec["selective_adam"] = True
+        if args.selective_adam is not None:
+            spec["selective_adam"] = args.selective_adam
         if args.selective_adam_groups is not None:
             spec["selective_adam_groups"] = args.selective_adam_groups
         if args.selective_adam_steps is not None:

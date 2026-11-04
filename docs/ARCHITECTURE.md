@@ -13,6 +13,7 @@ in [BENCHMARKS.md](BENCHMARKS.md); rejected approaches, with numbers, live in
 | Metal binning vs torch binning | **bit-identical** image and alpha |
 | fused SSIM vs the `F.conv2d` expression | value bit-identical, gradient cosine 1.00000012 |
 | fused Adam vs `torch.optim.Adam` | rel 4.7×10⁻⁷ after 30 steps |
+| fused selective Adam vs its torch path | rel < 10⁻⁵ after 40 steps; hidden rows **bit-identical** |
 
 Run the suite with `pytest tests`. `tests/test_runner.py` guards the
 benchmark harness rather than the kernels — every wrong number this project has published came
