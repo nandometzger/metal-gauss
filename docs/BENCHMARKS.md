@@ -257,7 +257,43 @@ costs 5.1 dB**. The mean gap above is 2.9 dB — that is, at 7 k iterations most
 than the protocol penalty alone would predict, and none is now an outlier beyond it.
 
 Run-to-run spread on this protocol, measured over two full sweeps of all 8 scenes: **0.07 dB
-typical, 0.19 dB worst** (`python bench/reproducibility.py`). The 0.49 dB figure quoted elsewhere in
+typical, 0.19 dB worst** (`python bench/reproducibility.py`).
+
+## Mip-NeRF 360, all 9 scenes
+
+Real, unbounded, public captures, run under 3DGS's own protocol:
+- outdoor scenes on `images_4`, indoor scenes on `images_2`;
+- every 8th image held out;
+- the paper reports **7 k** as well as 30 k iterations, so its 7 k column is exactly this
+  protocol, with no short-protocol caveat.
+
+<!-- BEGIN:mipnerf360 -->
+| scene | PSNR | train wall | splats | 3DGS @7k | Δ vs 7k | 3DGS @30k |
+|---|---:|---:|---:|---:|---:|---:|
+| bicycle | 24.15 | 6.4 min | 1,000,000 | 23.60 | +0.55 | 25.25 |
+| flowers | 20.87 | 8.3 min | 1,000,000 | 20.52 | +0.36 | 21.52 |
+| garden | 25.85 | 8.7 min | 1,000,000 | 26.25 | -0.39 | 27.41 |
+| stump | 25.73 | 7.9 min | 1,000,000 | 25.71 | +0.02 | 26.55 |
+| treehill | 22.83 | 7.7 min | 1,000,000 | 22.09 | +0.74 | 22.49 |
+| room | 30.67 | 9.7 min | 1,000,000 | 28.14 | +2.53 | 30.63 |
+| counter | 27.73 | 11.6 min | 1,000,000 | 26.70 | +1.03 | 28.70 |
+| kitchen | 28.93 | 12.0 min | 1,000,000 | 28.55 | +0.38 | 30.32 |
+| bonsai | 30.25 | 11.4 min | 1,000,000 | 28.85 | +1.40 | 31.98 |
+| **mean (9)** | **26.33** | | | 25.60 | **+0.73** | |
+
+*7000 steps, budget `1000000`, outdoor scenes on `images_4` and indoor on `images_2`, every 8th image held out (3DGS's protocol), selective Adam `default`. 3DGS columns: Kerbl et al. 2023, Table 5. Built from `a61cd2c`. Wall times are from a machine at the end of a day of load, partly on battery: read them as an upper bound. PSNR is unaffected.*
+<!-- END:mipnerf360 -->
+
+**Read this as quality per training step, not as kernel speed.** At the same 7 k steps we are
+**+0.73 dB** over 3DGS on the 9-scene mean (95 % CI [+0.08, +1.39], 8 of 9 scenes ahead). That is
+the training recipe: a fixed 1 M budget with MCMC relocation and coarse-to-fine. It is not a claim
+that our kernels beat CUDA.
+
+On time, the paper's Table 1 gives **6 min 25 s** average for 7 k on Mip-NeRF 360 on an **A6000**.
+This laptop averaged **9.3 min** of training, measured at the end of a day of load and partly on
+battery. That is the same order as the 2023 reference implementation on a workstation GPU. Current
+CUDA implementations (gsplat, Taming-3DGS) on current GPUs are several times faster than that
+reference, and none has been run here. Each scene ran once. The 0.49 dB figure quoted elsewhere in
 this README was measured on room1 at 10 k/1600 px and does not apply here.
 
 Every row is generated from a committed JSON carrying the trainer's own resolved configuration
@@ -366,6 +402,18 @@ done
 The Brush and spirula binaries live under `third_party/` and persist; msplat is installed to
 `/tmp/cmp_msplat` and needs reinstalling if that is purged.
 
+Mip-NeRF 360 lives under `data/mipnerf360/<scene>/` (gitignored, 17 GB as downloaded). The sweep
+reads only `sparse/0` plus `images_4` (outdoor) or `images_2` (indoor), so those are all that
+need unpacking:
+
+```bash
+cd data/mipnerf360
+curl -LO http://storage.googleapis.com/gresearch/refraw360/360_v2.zip            # 12.5 GB
+curl -LO https://storage.googleapis.com/gresearch/refraw360/360_extra_scenes.zip # 4.5 GB
+unzip -n 360_v2.zip '*/sparse/*' '*/images_4/*' '*/images_2/*'
+unzip -n 360_extra_scenes.zip '*/sparse/*' '*/images_4/*'
+```
+
 ### Tools
 
 Every script under `bench/`, and what it is for. Eight of these were undocumented until this table
@@ -390,6 +438,7 @@ zero callers) survived as long as they did.
 | `bench/readme_tables.py` | regenerate every table in README/docs; `--check` fails on drift |
 | `bench/quarantine.py` | list results that cannot state the protocol they ran under |
 | `bench/tile_sweep.py` | tile size at a given operating point |
+| `bench/mipnerf360_sweep.py` | the 9-scene Mip-NeRF 360 table, 3DGS's resolution per scene and held-out split |
 
 ### Benchmarks
 
@@ -397,6 +446,7 @@ zero callers) survived as long as they did.
 python bench/quick.py stages                  # raster speed table
 python bench/step_profile.py --res 270        # step breakdown
 python bench/nerf_synthetic_sweep.py          # 8-scene table   (22.6 min measured)
+python bench/mipnerf360_sweep.py --budget 1000000   # 9-scene real-scene table (84 min measured)
 python bench/compare/pareto.py --msplat-stock  # Pareto front vs msplat  (~35 min)
 python bench/readme_tables.py --check         # fail if a README table drifts from its JSON
 python bench/quarantine.py                    # list results that cannot state their own protocol

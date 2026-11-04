@@ -112,6 +112,54 @@ def table_nerf_synthetic(fn: str = "nerf_synthetic_7000_auto_v2.json") -> str:
     return "\n".join(lines)
 
 
+SCENES_360 = ["bicycle", "flowers", "garden", "stump", "treehill",
+              "room", "counter", "kitchen", "bonsai"]
+
+# 3DGS as published (Kerbl et al. 2023, Table 5, per-scene Mip-NeRF 360 PSNR).
+# The paper reports 7k as well as 30k, so here the 7k column IS our protocol --
+# the one comparison in these docs that needs no short-protocol caveat.
+PUBLISHED_360_7K = {"bicycle": 23.604, "flowers": 20.515, "garden": 26.245,
+                    "stump": 25.709, "treehill": 22.085, "room": 28.139,
+                    "counter": 26.705, "kitchen": 28.546, "bonsai": 28.850}
+PUBLISHED_360_30K = {"bicycle": 25.246, "flowers": 21.520, "garden": 27.410,
+                     "stump": 26.550, "treehill": 22.490, "room": 30.632,
+                     "counter": 28.700, "kitchen": 30.317, "bonsai": 31.980}
+
+
+def table_mipnerf360(fn: str = "mipnerf360_7000.json") -> str:
+    """Per-scene PSNR on Mip-NeRF 360 against 3DGS at the same step count."""
+    d = load(fn)
+    by = _rows_by_scene(d)
+    lines = ["| scene | PSNR | train wall | splats | 3DGS @7k | Δ vs 7k | 3DGS @30k |",
+             "|---|---:|---:|---:|---:|---:|---:|"]
+    ours, pub7 = [], []
+    for sc in SCENES_360:
+        rs = by.get(sc)
+        if not rs:
+            lines.append(f"| {sc} | — | — | — | {_fmt(PUBLISHED_360_7K[sc])} | — | "
+                         f"{_fmt(PUBLISHED_360_30K[sc])} |")
+            continue
+        pm = sum(r["psnr"] for r in rs) / len(rs)
+        wm = sum(r["train_only_wall_s"] for r in rs) / len(rs) / 60.0
+        p7 = PUBLISHED_360_7K[sc]
+        lines.append(f"| {sc} | {_fmt(pm)} | {_fmt(wm, 1)} min | {rs[0]['n_splats']:,} | "
+                     f"{_fmt(p7)} | {pm - p7:+.2f} | {_fmt(PUBLISHED_360_30K[sc])} |")
+        ours.append(pm); pub7.append(p7)
+    if ours:
+        mo, m7 = sum(ours) / len(ours), sum(pub7) / len(pub7)
+        lines.append(f"| **mean ({len(ours)})** | **{_fmt(mo)}** | | | {_fmt(m7)} | "
+                     f"**{mo - m7:+.2f}** | |")
+    env = (d.get("rows") or [{}])[0].get("env", {})
+    p_ = d.get("protocol", {})
+    note = f" {p_['note']}" if p_.get("note") else ""
+    lines += ["", f"*{p_.get('steps', '?')} steps, budget `{p_.get('budget', '?')}`, "
+                  f"outdoor scenes on `images_4` and indoor on `images_2`, every 8th image "
+                  f"held out (3DGS's protocol), selective Adam "
+                  f"`{p_.get('selective_adam', '?')}`. 3DGS columns: Kerbl et al. 2023, "
+                  f"Table 5. Built from `{env.get('git', '?')}`.{note}*"]
+    return "\n".join(lines)
+
+
 def table_pareto(fn: str = "pareto_all.json") -> str:
     d = load(fn)
     rows = [r for r in d["rows"] if r.get("ok") and r.get("psnr") is not None]
@@ -435,6 +483,7 @@ TARGETS = {
     # the 8-scene aggregate: one scene is an example, not a claim about a method.
     "pareto": "docs/BENCHMARKS.md",
     "nerf-synthetic": "docs/BENCHMARKS.md",
+    "mipnerf360": "docs/BENCHMARKS.md",
     "raster": "docs/BENCHMARKS.md",
     "step-profile": "docs/BENCHMARKS.md",
     "calibration": "docs/BENCHMARKS.md",
@@ -447,6 +496,7 @@ TARGETS = {
 
 TABLES = {
     "nerf-synthetic": table_nerf_synthetic,
+    "mipnerf360": table_mipnerf360,
     "pareto": table_pareto,
     "raster": table_raster,
     "step-profile": table_step_profile,
