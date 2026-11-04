@@ -237,6 +237,10 @@ the preview shares the GPU.
   catches a second trainer, not a compositor.
 - 7 k numbers are **not comparable to published 30 k numbers** — 5.1 dB apart.
 - `--antialias` is off by default; worth **+6.68 dB at 200 px** render resolution.
+- Selective Adam is **on** by default (`--no-selective-adam` turns it off): each step updates the
+  SH of only the gaussians the view sees. **−21 % wall** on room1 at 600 k splats, neutral on
+  NeRF-synthetic (+0.03 dB, same speed). Skipping geometry too cost 0.86 dB; see
+  [NEGATIVE_RESULTS](https://github.com/nandometzger/metal-gauss/blob/main/bench/results/NEGATIVE_RESULTS.md).
 - Run-to-run noise floors: ours **0.19 dB**, Brush **0.74**, spirula **0.15–1.27**, msplat **3.35**
   (no seed flag).
 - `--budget` at 1 M splats: **+2.75 dB** lego, **+1.40** mic, **−0.20** ship, all at ~5× the time.

@@ -60,9 +60,9 @@ def main():
     ap.add_argument("--out", default=None)
     ap.add_argument("--torch-adam", action="store_true",
                     help="profile torch.optim.Adam instead of the trainer's FusedAdam")
-    ap.add_argument("--selective-adam", action="store_true",
-                    help="profile the trainer's --selective-adam: only the gaussians "
-                         "each view sees are updated")
+    ap.add_argument("--selective-adam", action=argparse.BooleanOptionalAction, default=True,
+                    help="the trainer's default: only the SH of gaussians each view "
+                         "sees is updated; --no-selective-adam profiles dense Adam")
     ap.add_argument("--selective-adam-groups", choices=["all", "sh"], default="sh")
     ap.add_argument("--selective-adam-steps", choices=["row", "global"], default="global")
     args = ap.parse_args()

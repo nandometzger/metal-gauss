@@ -17,6 +17,15 @@ Measured on one machine: **Apple M5, 24 GB, macOS 26**. Every number traces to a
 > after a 2-second sustained-load ramp, which is the clock a real training run actually sees.
 > Burst numbers would be up to 40 % more flattering.
 
+> **Selective Adam became the default on 2026-11-04. The tables below predate it and were not
+> re-run.** On NeRF-synthetic it changes nothing measurable. Quality was +0.03 dB [−0.04, +0.10]
+> over the 8 scenes. Adam takes 1.6 ms either way at 100 k gaussians, and paired wall times moved
+> −3 % on mic and +9 % on ship, both inside run-to-run noise. So those tables still describe the
+> defaults. A re-run at the new default is in `nerf_synthetic_7000_selective_default.json`; its PSNR
+> matches, and its wall times come from a machine running ~30 % slow, so compare PSNR only. Where it
+> does matter is a large real capture: on room1 at 600 k, Adam drops 9.60 → 4.75 ms and a 10 k run
+> takes 21 % less wall time (head-to-head below). The step-profile table still shows dense Adam.
+
 ## Apple-Silicon head-to-head
 
 Real capture, 162 images, COLMAP undistorted to PINHOLE so every implementation reads identical
@@ -26,12 +35,19 @@ data. Runs sequential, never concurrent.
 
 | | PSNR | wall |
 |---|---:|---:|
-| **metal-gauss** (current defaults) | **27.62** | **11.9 min** |
+| **metal-gauss** (defaults before selective Adam) | **27.62** | **11.9 min** |
 | metal-gauss (as published 2026-08-26) | 27.43 | 28.5 min |
 | [Brush](https://github.com/ArthurBrussee/brush) ¹ | 27.55 | ~40–44 min |
 
 ¹ *Brush's number is from an earlier measurement whose JSON cannot state its own protocol
 (`provenance: incomplete`); it is cited as a reference point, not as evidence.*
+
+**Selective Adam, the default since that row,** was measured on the same capture, back to back
+against `--no-selective-adam`. It ran on the distorted copy, because the undistorted one above was
+staged under `/tmp` and has been purged. The settings were the same: 10 k, 600 k splats, 1600 px.
+PSNR went **27.09 → 27.32 dB**, inside the run-to-run spread below, so read it as unchanged. Wall
+time went **18.0 → 14.3 min, −21%**. Two 6K displays shared the GPU in both runs, which is why both
+are slower than the row above.
 
 **Read this as "matches Brush at roughly 3.5× the speed", not "beats Brush".** The 0.07 dB gap to
 Brush and the 0.19 dB gain over our own earlier run are both **inside the measured 0.49 dB
