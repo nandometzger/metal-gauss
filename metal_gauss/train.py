@@ -166,6 +166,8 @@ def split_sh(p: dict) -> dict:
 
 def make_optimizer(p: dict, lr_means0: float, *, lr_opac: float = 1e-2,
                    sh_lr_div: float = 20.0, selective: bool = False,
+                   selective_groups: str = "sh",
+                   selective_steps: str = "global",
                    fused: bool = True, appearance: AppearanceModel | None = None,
                    lr_appearance: float = 1e-3):
     groups = [
@@ -184,7 +186,14 @@ def make_optimizer(p: dict, lr_means0: float, *, lr_opac: float = 1e-2,
                        "rowwise": False})
     if selective:
         from metal_gauss.selective_adam import SelectiveAdam
-        return SelectiveAdam(groups, eps=1e-15)
+        if selective_groups == "sh":
+            # Only colour skips hidden rows. Geometry and opacity stay dense:
+            # their momentum and the MCMC regularisers act on every gaussian.
+            for g in groups:
+                if g["name"] not in ("sh_dc", "sh_rest"):
+                    g["rowwise"] = False
+        return SelectiveAdam(groups, eps=1e-15, fused=fused,
+                             row_steps=selective_steps == "row")
     if fused:
         from metal_gauss.fused_adam import FusedAdam
         return FusedAdam(groups, eps=1e-15)
@@ -281,11 +290,13 @@ def train(args) -> dict:
     print(f"{len(scene.train)} train views, {len(scene.heldout)} held out, "
           f"{len(scene.points):,} sparse points, budget {args.budget:,}")
 
-    # Selective Adam was built, validated, and MEASURED SLOWER here: at this
-    # scene's per-view visibility (well above 50%), 15 gather/scatter launches
-    # (or the masked-dense where-chain) cost more than dense Adam's 69 ms.
-    # It stays available via --selective-adam for low-visibility regimes;
-    # measurement-first means the default is the thing that is actually fast.
+    # --selective-adam: in torch it measured SLOWER than dense Adam (15
+    # gather/scatter launches); as one Metal kernel it halves Adam on room1
+    # (600k, 9.60 -> 4.75 ms). What it skips decides the quality: skipping
+    # every group with per-gaussian bias correction cost 0.86 dB on all 8
+    # NeRF-synthetic scenes; skipping only the SH groups with the global step
+    # count measured +0.03 dB [-0.04, +0.10]. Those are the defaults; see
+    # bench/results/NEGATIVE_RESULTS.md.
     p = init_params(scene, args.budget, device)
     # Position LR is relative to scene scale, and SH bands 1+ train 20x colder
     # than DC: with ~160 views, hot high-band SH memorises per-view shading and
@@ -300,7 +311,10 @@ def train(args) -> dict:
         appearance = AppearanceModel(len(scene.train), args.appearance, device)
     opt = make_optimizer(p, lr_means0, lr_opac=args.lr_opac,
                          sh_lr_div=args.sh_lr_div,
-                         selective=args.selective_adam, fused=args.fused_adam,
+                         selective=args.selective_adam,
+                         selective_groups=args.selective_adam_groups,
+                         selective_steps=args.selective_adam_steps,
+                         fused=args.fused_adam,
                          appearance=appearance, lr_appearance=args.lr_appearance)
     if appearance is not None:
         print(f"appearance correction: {args.appearance} "
@@ -755,6 +769,12 @@ def main():
     # rankings measured on a 1k-step run do not transfer to 10k.
     ap.add_argument("--steps-scaler", type=float, default=1.0)
     ap.add_argument("--selective-adam", action="store_true")
+    ap.add_argument("--selective-adam-groups", choices=["all", "sh"], default="sh",
+                    help="which parameters --selective-adam skips for hidden "
+                         "gaussians: all of them, or only the SH colour")
+    ap.add_argument("--selective-adam-steps", choices=["row", "global"], default="global",
+                    help="bias-correct each gaussian with its own visible-step "
+                         "count, or with the global step count (gsplat)")
     ap.add_argument("--densify-weight",
                     choices=["opacity", "grad", "opacity_grad", "grad_gate",
                              "absgrad"],

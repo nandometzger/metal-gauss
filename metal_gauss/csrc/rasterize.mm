@@ -360,6 +360,51 @@ void adam_step(torch::Tensor p, torch::Tensor g, torch::Tensor m, torch::Tensor 
     }
 }
 
+// Selective Adam over one parameter; see adam_step_rows. `visible` is the
+// renderer's bool mask, one byte per row. Rows at or past its length are
+// hidden, which is how a mask over the active set leaves capacity rows alone.
+// `steps` holds each row's step count, already incremented for this step;
+// k_global > 0 replaces it with the optimiser's global count.
+void adam_step_rows(torch::Tensor p, torch::Tensor g, torch::Tensor m, torch::Tensor v,
+                    torch::Tensor steps, torch::Tensor visible,
+                    double lr, double b1, double b2, double eps, double k_global)
+{
+    for (auto& t : {p, g, m, v, steps, visible}) checkMPS(t, "selective adam tensor");
+    TORCH_CHECK(p.dim() >= 1 && p.size(0) > 0, "adam_step_rows: parameter needs rows");
+    TORCH_CHECK(g.numel() == p.numel() && m.numel() == p.numel() && v.numel() == p.numel(),
+                "adam_step_rows: parameter/grad/moment numel mismatch");
+    TORCH_CHECK(steps.scalar_type() == torch::kFloat && steps.numel() == p.size(0),
+                "adam_step_rows: steps must be float32, one per row");
+    TORCH_CHECK(visible.scalar_type() == torch::kBool && visible.numel() <= p.size(0),
+                "adam_step_rows: visible must be bool, at most one per row");
+    const uint n = (uint)p.numel();
+    if (n == 0 || visible.numel() == 0) return;
+
+    struct { uint n, cols, rows; float lr, b1, b2, eps, omb1, omb2, k_global; } P = {
+        n, (uint)(p.numel() / p.size(0)), (uint)visible.numel(),
+        (float)lr, (float)b1, (float)b2, (float)eps,
+        (float)(1.0 - b1), (float)(1.0 - b2), (float)k_global,
+    };
+
+    @autoreleasepool {
+        id<MTLCommandBuffer> cb = torch::mps::get_command_buffer();
+        dispatch_sync(torch::mps::get_dispatch_queue(), ^{
+            id<MTLComputeCommandEncoder> enc = [cb computeCommandEncoder];
+            id<MTLComputePipelineState> ps = pso("adam_step_rows");
+            [enc setComputePipelineState:ps];
+            SETBUF(enc, p, 0); SETBUF(enc, g, 1);
+            SETBUF(enc, m, 2); SETBUF(enc, v, 3);
+            SETBUF(enc, steps, 4); SETBUF(enc, visible, 5);
+            [enc setBytes:&P length:sizeof(P) atIndex:6];
+            NSUInteger tg = MIN((NSUInteger)256, ps.maxTotalThreadsPerThreadgroup);
+            [enc dispatchThreads:MTLSizeMake(n, 1, 1)
+              threadsPerThreadgroup:MTLSizeMake(tg, 1, 1)];
+            [enc endEncoding];
+            torch::mps::commit();
+        });
+    }
+}
+
 static void ssim_dispatch(const char* kern, std::vector<torch::Tensor> bufs,
                           int64_t npix, int64_t stride)
 {
@@ -524,6 +569,7 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     m.def("preprocess_forward", &preprocess_forward);
     m.def("preprocess_backward", &preprocess_backward);
     m.def("adam_step", &adam_step);
+    m.def("adam_step_rows", &adam_step_rows);
     m.def("ssim_tail_forward", &ssim_tail_forward);
     m.def("ssim_tail_backward", &ssim_tail_backward);
     m.def("ssim_stack_blur_h", &ssim_stack_blur_h);
